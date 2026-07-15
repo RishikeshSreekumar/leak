@@ -1,0 +1,85 @@
+# GoReleaser configuration — https://goreleaser.com
+# Validate with:   goreleaser check
+# Dry-run build:   goreleaser build --snapshot --clean
+version: 2
+
+project_name: leak
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: leak
+    main: .
+    binary: leak
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/RishikeshSreekumar/leak/cmd.version={{ .Version }}
+      - -X github.com/RishikeshSreekumar/leak/cmd.commit={{ .Commit }}
+      - -X github.com/RishikeshSreekumar/leak/cmd.date={{ .Date }}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+      - docs/*
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+homebrew_casks:
+  - name: leak
+    repository:
+      owner: RishikeshSreekumar
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/RishikeshSreekumar/leak"
+    description: "Mark. Sweep. Save. — a terminal-first subscription manager."
+    commit_author:
+      name: goreleaserbot
+      email: goreleaser@rishikeshsreekumar.dev
+    # Strip the macOS quarantine attribute so the unsigned binary runs.
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/leak"]
+          end
+
+release:
+  github:
+    owner: RishikeshSreekumar
+    name: leak
+  draft: false
+  prerelease: auto
