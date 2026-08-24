@@ -9,6 +9,15 @@ import (
 // DateLayout is the human-editable date format used throughout Leak's files.
 const DateLayout = "2006-01-02"
 
+// SchemaVersion is the current on-disk registry schema version. It is written
+// into Data.Version on every save so future releases can migrate old files
+// forward without breakage. Bump it whenever the persisted shape changes and
+// add the corresponding step to Data.Migrate.
+//
+//	1 — versioning introduced.
+//	2 — deletion tombstones (Data.Deleted) added for sync.
+const SchemaVersion = 2
+
 // Status values for a subscription.
 const (
 	StatusActive    = "active"
@@ -146,6 +155,30 @@ func (s *Subscription) Touch(now time.Time) {
 	s.Rev++
 }
 
+// Sync transport kinds and merge strategies.
+const (
+	SyncKindNone = ""
+	SyncKindDir  = "dir"
+	SyncKindGit  = "git"
+
+	StrategyLWW    = "lww"
+	StrategyManual = "manual"
+)
+
+// SyncConfig describes the opt-in sync transport. A zero value (Kind == "")
+// means sync is disabled — every core command works without it.
+type SyncConfig struct {
+	Kind       string    `yaml:"kind,omitempty" json:"kind,omitempty"`         // dir | git
+	Target     string    `yaml:"target,omitempty" json:"target,omitempty"`     // directory path or git remote URL
+	Strategy   string    `yaml:"strategy,omitempty" json:"strategy,omitempty"` // lww (default) | manual
+	Device     string    `yaml:"device,omitempty" json:"device,omitempty"`     // label recorded on pushed snapshots
+	Auto       bool      `yaml:"auto,omitempty" json:"auto,omitempty"`         // sync after every mutating command
+	LastSynced time.Time `yaml:"last_synced,omitempty" json:"last_synced,omitempty"`
+}
+
+// Enabled reports whether a transport has been configured.
+func (s SyncConfig) Enabled() bool { return s.Kind != SyncKindNone && s.Target != "" }
+
 // Profile holds reusable user preferences (spec §7 / §12).
 type Profile struct {
 	DefaultCurrency      string   `yaml:"default_currency" json:"default_currency"`
@@ -155,7 +188,54 @@ type Profile struct {
 	Currencies           []string `yaml:"currencies" json:"currencies"`
 	Categories           []string `yaml:"categories" json:"categories"`
 	PaymentMethods       []string `yaml:"payment_methods" json:"payment_methods"`
+
+	// AutoBackup snapshots the registry before any bulk or destructive change
+	// (import, gc --apply, restore, sync merge). It is a pointer so a config
+	// file written before the field existed (nil) still gets the safe default
+	// of true, while an explicit `auto_backup: false` is honored.
+	AutoBackup *bool `yaml:"auto_backup,omitempty" json:"auto_backup,omitempty"`
+	// BackupKeep caps retained snapshots. 0 falls back to DefaultBackupKeep;
+	// a negative value means keep everything.
+	BackupKeep int `yaml:"backup_keep,omitempty" json:"backup_keep,omitempty"`
+
+	Sync SyncConfig `yaml:"sync,omitempty" json:"sync,omitempty"`
 }
+
+// DefaultBackupKeep is the retention used when backup_keep is unset.
+const DefaultBackupKeep = 20
+
+// AutoBackupEnabled reports whether pre-change snapshots are on (default true).
+func (p Profile) AutoBackupEnabled() bool { return p.AutoBackup == nil || *p.AutoBackup }
+
+// Normalize fills zero-valued fields with defaults, so a hand-edited or older
+// config.yaml missing keys behaves like a fresh one instead of yielding zeros.
+func (p *Profile) Normalize() {
+	def := DefaultProfile()
+	if p.DefaultCurrency == "" {
+		p.DefaultCurrency = def.DefaultCurrency
+	}
+	if p.ExchangeRateProvider == "" {
+		p.ExchangeRateProvider = def.ExchangeRateProvider
+	}
+	if p.ReviewAfterDays <= 0 {
+		p.ReviewAfterDays = def.ReviewAfterDays
+	}
+	if p.StaleAfterDays <= 0 {
+		p.StaleAfterDays = def.StaleAfterDays
+	}
+	if len(p.Currencies) == 0 {
+		p.Currencies = def.Currencies
+	}
+	if p.BackupKeep == 0 {
+		p.BackupKeep = DefaultBackupKeep
+	}
+	if p.Sync.Kind != SyncKindNone && p.Sync.Strategy == "" {
+		p.Sync.Strategy = StrategyLWW
+	}
+}
+
+// Bool returns a pointer to v, for setting optional profile flags.
+func Bool(v bool) *bool { return &v }
 
 // DefaultProfile returns the first-run profile.
 func DefaultProfile() Profile {
@@ -167,10 +247,69 @@ func DefaultProfile() Profile {
 		Currencies:           []string{"INR", "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "SGD", "AED", "CHF"},
 		Categories:           []string{"Development", "Entertainment", "Storage", "Utilities", "AI"},
 		PaymentMethods:       []string{"ICICI Amazon Pay", "HDFC Millennia", "SBI Cashback", "UPI", "PayPal"},
+		AutoBackup:           Bool(true),
+		BackupKeep:           DefaultBackupKeep,
 	}
+}
+
+// Tombstone records a hard-deleted subscription. Without it a delete on one
+// device would be silently resurrected by the next sync from another device,
+// because the remote still holds the record.
+type Tombstone struct {
+	ID        string    `yaml:"id" json:"id"`
+	DeletedAt time.Time `yaml:"deleted_at" json:"deleted_at"`
 }
 
 // Data is the full subscription registry persisted to disk.
 type Data struct {
+	// Version is the schema version the file was written with. A zero value
+	// means a pre-versioning file (implicitly schema 0); Migrate upgrades it.
+	Version       int            `yaml:"version" json:"version"`
 	Subscriptions []Subscription `yaml:"subscriptions" json:"subscriptions"`
+	// Deleted holds tombstones for hard-deleted ids so sync propagates the
+	// deletion instead of resurrecting the record.
+	Deleted []Tombstone `yaml:"deleted,omitempty" json:"deleted,omitempty"`
+}
+
+// Tombstone records (or refreshes) a deletion marker for id.
+func (d *Data) Tombstone(id string, at time.Time) {
+	at = at.UTC()
+	for i, t := range d.Deleted {
+		if t.ID == id {
+			if at.After(t.DeletedAt) {
+				d.Deleted[i].DeletedAt = at
+			}
+			return
+		}
+	}
+	d.Deleted = append(d.Deleted, Tombstone{ID: id, DeletedAt: at})
+}
+
+// DropTombstone clears any deletion marker for id — called when a record with
+// that id is (re-)created, so the resurrection is intentional and sticks.
+func (d *Data) DropTombstone(id string) {
+	out := d.Deleted[:0]
+	for _, t := range d.Deleted {
+		if t.ID != id {
+			out = append(out, t)
+		}
+	}
+	d.Deleted = out
+	if len(d.Deleted) == 0 {
+		d.Deleted = nil
+	}
+}
+
+// Migrate upgrades a loaded registry to the current SchemaVersion in place,
+// applying each intermediate step. It is safe to call on an already-current
+// file. Returns true if the on-disk version differed and a rewrite is wanted.
+func (d *Data) Migrate() (changed bool) {
+	from := d.Version
+	// Step 0 → 1: versioning introduced; no field transforms needed.
+	// Step 1 → 2: tombstones added; absent means "no deletions recorded yet".
+	// Future steps switch on d.Version here before the final stamp.
+	if d.Version < SchemaVersion {
+		d.Version = SchemaVersion
+	}
+	return from != d.Version
 }

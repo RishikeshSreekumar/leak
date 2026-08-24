@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/RishikeshSreekumar/leak/internal/model"
 	"gopkg.in/yaml.v3"
@@ -25,14 +26,16 @@ const (
 var ErrNotFound = errors.New("subscription not found")
 
 // Store is the persistence contract. Keeping it an interface lets commands and
-// tests swap in fakes and lets a future sync layer wrap it.
+// tests swap in fakes and lets the sync layer wrap it.
 type Store interface {
 	Load() (*model.Data, error)
 	Save(*model.Data) error
 	GetSub(id string) (model.Subscription, error)
 	AddSub(model.Subscription) (model.Subscription, error)
 	UpdateSub(model.Subscription) error
-	RemoveSub(id string) error
+	// RemoveSub hard-deletes a subscription and records a tombstone stamped at
+	// `at`, so the deletion survives a sync instead of being resurrected.
+	RemoveSub(id string, at time.Time) error
 	LoadProfile() (model.Profile, error)
 	SaveProfile(model.Profile) error
 	Dir() string
@@ -78,9 +81,11 @@ func (s *YAMLStore) Dir() string { return s.dir }
 
 func (s *YAMLStore) path(name string) string { return filepath.Join(s.dir, name) }
 
-// bootstrap creates the config dir and a default config.yaml if missing.
+// bootstrap creates the config dir and a default config.yaml if missing. The
+// directory is owner-only: it holds what someone pays for and how, which is
+// nobody else's business on a shared machine.
 func (s *YAMLStore) bootstrap() error {
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return err
 	}
 	if _, err := os.Stat(s.path(configFile)); errors.Is(err, os.ErrNotExist) {
@@ -104,11 +109,13 @@ func (s *YAMLStore) Load() (*model.Data, error) {
 	if err := yaml.Unmarshal(b, &d); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", subsFile, err)
 	}
+	d.Migrate()
 	return &d, nil
 }
 
-// Save writes the registry atomically.
+// Save writes the registry atomically, stamping the current schema version.
 func (s *YAMLStore) Save(d *model.Data) error {
+	d.Version = model.SchemaVersion
 	b, err := yaml.Marshal(d)
 	if err != nil {
 		return err
@@ -144,6 +151,9 @@ func (s *YAMLStore) AddSub(sub model.Subscription) (model.Subscription, error) {
 		sub.ID = Slugify(sub.Name)
 	}
 	sub.ID = uniqueID(sub.ID, existing)
+	// A re-created id is an intentional resurrection; clear any old tombstone
+	// so sync does not delete the new record.
+	d.DropTombstone(sub.ID)
 	d.Subscriptions = append(d.Subscriptions, sub)
 	return sub, s.Save(d)
 }
@@ -163,8 +173,8 @@ func (s *YAMLStore) UpdateSub(sub model.Subscription) error {
 	return ErrNotFound
 }
 
-// RemoveSub deletes a subscription by id.
-func (s *YAMLStore) RemoveSub(id string) error {
+// RemoveSub deletes a subscription by id and records a tombstone.
+func (s *YAMLStore) RemoveSub(id string, at time.Time) error {
 	d, err := s.Load()
 	if err != nil {
 		return err
@@ -182,6 +192,7 @@ func (s *YAMLStore) RemoveSub(id string) error {
 		return ErrNotFound
 	}
 	d.Subscriptions = out
+	d.Tombstone(id, at)
 	return s.Save(d)
 }
 
@@ -198,8 +209,15 @@ func (s *YAMLStore) LoadProfile() (model.Profile, error) {
 	if err := yaml.Unmarshal(b, &p); err != nil {
 		return model.Profile{}, fmt.Errorf("parsing %s: %w", configFile, err)
 	}
+	p.Normalize()
 	return p, nil
 }
+
+// SubsPath exposes the registry file location (used by `leak doctor`).
+func (s *YAMLStore) SubsPath() string { return s.path(subsFile) }
+
+// ConfigPath exposes the profile file location (used by `leak doctor`).
+func (s *YAMLStore) ConfigPath() string { return s.path(configFile) }
 
 // SaveProfile writes config.yaml atomically.
 func (s *YAMLStore) SaveProfile(p model.Profile) error {

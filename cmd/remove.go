@@ -21,7 +21,7 @@ func newRemoveCmd() *cobra.Command {
 				return err
 			}
 			if hard {
-				if err := d.Store.RemoveSub(sub.ID); err != nil {
+				if err := d.Store.RemoveSub(sub.ID, d.Clock.Now()); err != nil {
 					return err
 				}
 				fmt.Fprintf(d.Out, "%s Deleted %s\n", d.Render.Warn("✗"), sub.ID)

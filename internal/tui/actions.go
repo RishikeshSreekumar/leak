@@ -157,7 +157,7 @@ func (m Model) deleteCmd(id string) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		if err := cfg.Store.RemoveSub(id); err != nil {
+		if err := cfg.Store.RemoveSub(id, cfg.Clock.Now()); err != nil {
 			return errMsg{err}
 		}
 		return actionDoneMsg{status: "Deleted " + sub.Name}

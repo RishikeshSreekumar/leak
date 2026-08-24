@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/RishikeshSreekumar/leak/internal/model"
 	"github.com/stretchr/testify/assert"
@@ -43,9 +44,47 @@ func TestAddGetUpdateRemove(t *testing.T) {
 	got2, _ := s.GetSub("netflix")
 	assert.EqualValues(t, 699, got2.Amount)
 
-	require.NoError(t, s.RemoveSub("netflix"))
+	require.NoError(t, s.RemoveSub("netflix", time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)))
 	_, err = s.GetSub("netflix")
 	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestRemoveRecordsTombstoneAndReAddClearsIt(t *testing.T) {
+	s := newTestStore(t)
+	deletedAt := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	_, err := s.AddSub(model.Subscription{Name: "Netflix", Status: model.StatusActive})
+	require.NoError(t, err)
+	require.NoError(t, s.RemoveSub("netflix", deletedAt))
+
+	d, err := s.Load()
+	require.NoError(t, err)
+	require.Len(t, d.Deleted, 1, "a hard delete must leave a tombstone for sync")
+	assert.Equal(t, "netflix", d.Deleted[0].ID)
+	assert.True(t, deletedAt.Equal(d.Deleted[0].DeletedAt))
+
+	// Re-adding the same id is an intentional resurrection.
+	_, err = s.AddSub(model.Subscription{Name: "Netflix"})
+	require.NoError(t, err)
+	d, err = s.Load()
+	require.NoError(t, err)
+	assert.Empty(t, d.Deleted, "re-created id should drop its tombstone")
+}
+
+func TestLoadProfileNormalizesMissingKeys(t *testing.T) {
+	dir := t.TempDir()
+	// A hand-edited config with only one key set — everything else must fall
+	// back to defaults instead of zeros.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, configFile), []byte("default_currency: USD\n"), 0o644))
+	s, err := NewAt(dir)
+	require.NoError(t, err)
+
+	p, err := s.LoadProfile()
+	require.NoError(t, err)
+	assert.Equal(t, "USD", p.DefaultCurrency)
+	assert.Equal(t, 180, p.StaleAfterDays)
+	assert.Equal(t, 90, p.ReviewAfterDays)
+	assert.True(t, p.AutoBackupEnabled(), "auto-backup defaults on for pre-existing configs")
+	assert.Equal(t, model.DefaultBackupKeep, p.BackupKeep)
 }
 
 func TestIDDedupe(t *testing.T) {

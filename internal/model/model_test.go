@@ -56,3 +56,16 @@ func TestDefaultProfile(t *testing.T) {
 	assert.Equal(t, 180, p.StaleAfterDays)
 	assert.Contains(t, p.Categories, "AI")
 }
+
+func TestDataMigrateStampsVersion(t *testing.T) {
+	// A pre-versioning file (Version 0) upgrades to the current schema.
+	d := &Data{Subscriptions: []Subscription{{ID: "a"}}}
+	changed := d.Migrate()
+	assert.True(t, changed, "0 -> current should report a change")
+	assert.Equal(t, SchemaVersion, d.Version)
+
+	// Already-current is a no-op.
+	changed = d.Migrate()
+	assert.False(t, changed)
+	assert.Equal(t, SchemaVersion, d.Version)
+}
