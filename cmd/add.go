@@ -45,6 +45,7 @@ func newAddCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(d.Out, "%s Subscription added: %s (%s)\n", d.Render.Accent("✓"), saved.Name, saved.ID)
+			autoSync(cmd)
 			return nil
 		},
 	}

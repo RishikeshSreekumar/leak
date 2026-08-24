@@ -43,6 +43,7 @@ func newReviewCmd() *cobra.Command {
 				}
 			}
 			fmt.Fprintln(d.Out, d.Render.Accent("✓ Review complete"))
+			autoSync(cmd)
 			return nil
 		},
 	}
@@ -59,6 +60,7 @@ func newMarkCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(d.Out, "%s Confirmed %s\n", d.Render.Accent("✓"), args[0])
+			autoSync(cmd)
 			return nil
 		},
 	}

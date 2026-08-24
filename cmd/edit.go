@@ -35,6 +35,7 @@ func newEditCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(d.Out, "%s Updated %s\n", d.Render.Accent("✓"), sub.ID)
+			autoSync(cmd)
 			return nil
 		},
 	}

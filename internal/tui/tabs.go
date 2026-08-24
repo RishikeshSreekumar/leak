@@ -132,6 +132,7 @@ func (m Model) helpBody() string {
 		{"c", "cancel"},
 		{"r", "reactivate"},
 		{"d", "delete"},
+		{"S", "sync with the configured remote"},
 		{"?", "toggle this help"},
 		{"q / ctrl+c", "quit"},
 	}

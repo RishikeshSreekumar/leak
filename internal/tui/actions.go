@@ -1,11 +1,17 @@
 package tui
 
 import (
+	"context"
+	"fmt"
+	"path/filepath"
+
 	"github.com/RishikeshSreekumar/leak/internal/audit"
+	"github.com/RishikeshSreekumar/leak/internal/backup"
 	"github.com/RishikeshSreekumar/leak/internal/fx"
 	"github.com/RishikeshSreekumar/leak/internal/insights"
 	"github.com/RishikeshSreekumar/leak/internal/model"
 	"github.com/RishikeshSreekumar/leak/internal/money"
+	"github.com/RishikeshSreekumar/leak/internal/sync"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -119,6 +125,50 @@ func (m Model) saveFormCmd(sf *subForm) tea.Cmd {
 			return errMsg{err}
 		}
 		return actionDoneMsg{status: "Updated " + sub.Name}
+	}
+}
+
+// syncCmd runs one sync cycle off the UI thread — same engine and same safety
+// (a pre-merge backup) as `leak sync`, so the dashboard is not a second-class
+// way to use Leak.
+func (m Model) syncCmd() tea.Cmd {
+	cfg := m.cfg
+	return func() tea.Msg {
+		dir := cfg.Store.Dir()
+		transport, err := sync.NewTransport(cfg.Profile.Sync, dir)
+		if err != nil {
+			return errMsg{err}
+		}
+		eng := &sync.Engine{
+			Store:     cfg.Store,
+			Transport: transport,
+			Config:    cfg.Profile.Sync,
+			Now:       cfg.Clock.Now,
+			StatePath: filepath.Join(dir, sync.StateFile),
+			BeforeApply: func() error {
+				if !cfg.Profile.AutoBackupEnabled() {
+					return nil
+				}
+				_, err := backup.Create(dir, cfg.Clock.Now())
+				if backup.IsNothingToBackUp(err) {
+					return nil
+				}
+				return err
+			},
+		}
+		rep, err := eng.Sync(context.Background(), false)
+		if err != nil {
+			return errMsg{err}
+		}
+		switch {
+		case rep.Added+rep.Updated+rep.Removed > 0:
+			return actionDoneMsg{status: fmt.Sprintf("Synced: %d added, %d updated, %d removed",
+				rep.Added, rep.Updated, rep.Removed)}
+		case rep.Published:
+			return actionDoneMsg{status: "Synced: published this device's changes"}
+		default:
+			return actionDoneMsg{status: "Already in sync"}
+		}
 	}
 }
 

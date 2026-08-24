@@ -64,7 +64,9 @@ func newGCCmd() *cobra.Command {
 			if !apply {
 				fmt.Fprintf(d.Out, "\nDry run. Re-run with --apply to cancel %d subscription(s), saving %s/mo.\n",
 					len(zs), money.Format(sav.Monthly, d.Profile.DefaultCurrency))
+				return nil
 			}
+			autoSync(cmd)
 			return nil
 		},
 	}

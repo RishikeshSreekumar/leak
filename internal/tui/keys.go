@@ -22,6 +22,7 @@ const (
 	keyReactivate = "r"
 	keyDelete     = "d"
 	keySort       = "s"
+	keySync       = "S"
 	keyHelp       = "?"
 )
 
@@ -29,4 +30,4 @@ const (
 const actionHelp = "enter details · [a]dd [e]dit [m]ark [c]ancel [r]eactivate [d]elete [s]ort"
 
 // navHelp is the always-present footer hint.
-const navHelp = "1-5/tab switch · j/k move · / filter · ? help · q quit"
+const navHelp = "1-5/tab switch · j/k move · / filter · [S]ync · ? help · q quit"

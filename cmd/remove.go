@@ -29,6 +29,7 @@ func newRemoveCmd() *cobra.Command {
 					return err
 				}
 				fmt.Fprintf(d.Out, "%s Deleted %s\n", d.Render.Warn("✗"), sub.ID)
+				autoSync(cmd)
 				return nil
 			}
 			sub.Status = model.StatusCancelled
@@ -37,6 +38,7 @@ func newRemoveCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(d.Out, "%s Cancelled %s\n", d.Render.Accent("✓"), sub.ID)
+			autoSync(cmd)
 			return nil
 		},
 	}

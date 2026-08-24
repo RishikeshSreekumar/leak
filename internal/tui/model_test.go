@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,7 @@ import (
 	"github.com/RishikeshSreekumar/leak/internal/fx"
 	"github.com/RishikeshSreekumar/leak/internal/model"
 	"github.com/RishikeshSreekumar/leak/internal/store"
+	"github.com/RishikeshSreekumar/leak/internal/sync"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -353,4 +356,33 @@ func TestInsightsHasBarsAndSummary(t *testing.T) {
 	assert.Contains(t, body, "Top Subscriptions")
 	assert.Contains(t, body, "Payment Methods")
 	assert.Contains(t, body, "█")
+}
+
+func TestSyncKeyWithoutConfigExplainsItself(t *testing.T) {
+	m := newLoadedModel(t)
+	m, cmd := press(t, m, keySync)
+	assert.Nil(t, cmd, "nothing should run when sync is unconfigured")
+	assert.Contains(t, m.status, "Sync not configured")
+}
+
+func TestSyncKeyRunsACycle(t *testing.T) {
+	m := newLoadedModel(t)
+	shared := filepath.Join(t.TempDir(), "shared")
+	m.cfg.Profile.Sync = model.SyncConfig{
+		Kind: model.SyncKindDir, Target: shared, Strategy: model.StrategyLWW, Device: "test",
+	}
+
+	m, cmd := press(t, m, keySync)
+	require.NotNil(t, cmd)
+	assert.Equal(t, "Syncing…", m.status)
+
+	m = apply(t, m, cmd())
+	assert.Contains(t, m.status, "Synced", "first sync seeds the remote: %q", m.status)
+
+	// The snapshot is really on disk and readable by any other device.
+	b, err := os.ReadFile(filepath.Join(shared, sync.SnapshotFile))
+	require.NoError(t, err)
+	snap, err := sync.Unmarshal(b)
+	require.NoError(t, err)
+	assert.Len(t, snap.Subs, 3)
 }

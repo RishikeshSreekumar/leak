@@ -269,6 +269,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.act(m.reactivateCmd)
 	case keyDelete:
 		return m.act(m.deleteCmd)
+	case keySync:
+		if !m.cfg.Profile.Sync.Enabled() {
+			m.status = "Sync not configured — run `leak sync init --dir <path>`"
+			return m, nil
+		}
+		m.status = "Syncing…"
+		return m, m.syncCmd()
 	}
 
 	// Forward remaining keys to the viewport for Insights scrolling.
