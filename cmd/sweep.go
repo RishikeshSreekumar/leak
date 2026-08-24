@@ -42,6 +42,12 @@ func newGCCmd() *cobra.Command {
 				fmt.Fprintln(d.Out, d.Render.Accent("✓ Nothing to collect."))
 				return nil
 			}
+			// A bulk cancel is the most regrettable action in Leak; snapshot first.
+			if apply {
+				if err := autoBackup(d, "gc --apply"); err != nil {
+					return err
+				}
+			}
 			for _, z := range zs {
 				if apply {
 					sub := z.Sub

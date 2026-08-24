@@ -73,6 +73,7 @@ func NewRoot(d *Deps) *cobra.Command {
 		newReviewCmd(), newMarkCmd(), newSweepCmd(), newGCCmd(),
 		newProfileCmd(), newCurrencyCmd(), newCategoryCmd(), newPaymentCmd(),
 		newImportCmd(), newExportCmd(),
+		newBackupCmd(), newRestoreCmd(),
 		newSyncCmd(),
 	)
 	return root

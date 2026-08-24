@@ -21,6 +21,10 @@ func newRemoveCmd() *cobra.Command {
 				return err
 			}
 			if hard {
+				// A hard delete is the one irreversible command; snapshot first.
+				if err := autoBackup(d, "remove --hard"); err != nil {
+					return err
+				}
 				if err := d.Store.RemoveSub(sub.ID, d.Clock.Now()); err != nil {
 					return err
 				}
