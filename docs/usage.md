@@ -34,6 +34,18 @@ leak add --name Netflix --amount 649 --currency INR \
 - `--renewal` is the next billing date (`YYYY-MM-DD`).
 - `--currency` can differ per subscription; reports convert to your default.
 
+### From a bank statement
+
+Instead of typing each one in, point Leak at a CSV export from your bank or card:
+
+```bash
+leak scan statement.csv           # dry run — what looks recurring?
+leak scan statement.csv --apply   # add the untracked ones
+```
+
+Full details, including the tuning flags, are in
+[data management](data.md#from-a-bank-or-card-statement).
+
 ## Viewing what you pay for
 
 ```bash
@@ -45,6 +57,13 @@ leak due --days 7         # renewals in the next 7 days
 leak insights             # top expenses, spending heatmap, savings ideas
 leak categories           # spend grouped by category
 leak payment-methods      # spend grouped by payment method
+```
+
+Every one of these takes `--json` for scripting:
+
+```bash
+leak list --json | jq '.[] | select(.currency == "USD") | .name'
+leak sweep --json | jq '.savings.yearly'
 ```
 
 Every subscription has a short **id** (shown in `leak list`) used by `show`,
@@ -105,8 +124,25 @@ leak export --format csv          # CSV
 leak export --format yaml         # YAML
 leak export --format json > subs.json
 
-leak import subs.json             # load subscriptions from a file
+leak import subs.json             # add what's new, skip duplicates
+leak import subs.csv --dry-run    # preview without writing
+leak import subs.csv --update     # overwrite existing records too
 ```
+
+## Backup, restore, and health
+
+```bash
+leak backup                       # snapshot the registry
+leak backup list                  # newest first
+leak restore                      # roll back to the newest snapshot
+leak backup prune --keep 5        # trim old snapshots
+
+leak doctor                       # check the registry and config
+leak doctor --fix                 # apply the safe repairs
+```
+
+Bulk and destructive commands snapshot first, so a bad import or an over-eager
+`gc --apply` is one `leak restore` away. Details: [data management](data.md).
 
 ## Data & configuration
 
@@ -128,8 +164,14 @@ default_currency: INR
 exchange_rate_provider: frankfurter.dev
 review_after_days: 90
 stale_after_days: 180
+auto_backup: true                 # snapshot before bulk/destructive changes
+backup_keep: 20                   # retained snapshots (-1 keeps everything)
 categories: [Development, Entertainment, Storage, Utilities, AI]
 payment_methods: [ICICI Amazon Pay, HDFC Millennia, UPI]
+sync:                             # written by `leak sync init`
+  kind: dir
+  target: /Users/me/Dropbox/leak
+  strategy: lww
 ```
 
 Manage the profile from the CLI instead of editing by hand:
@@ -143,17 +185,37 @@ leak payment add <name>           # add a payment method
 leak payment remove <name>        # remove a payment method
 ```
 
-## Sync (designed, not yet built)
+## Sync across devices
 
-`leak sync push|pull|status` is a designed seam for a future backend — local
-stays the source of truth. The JSON export format is already sync-ready
-(`updated_at`/`rev` on every record). See
-[`internal/sync`](../internal/sync/sync.go).
+Opt-in, no account required — local files stay the source of truth.
+
+```bash
+leak sync init --dir ~/Dropbox/leak        # or --git git@github.com:me/subs.git
+leak sync                                  # fetch → merge → publish
+leak sync status                           # what would change?
+leak sync pull                             # merge in, don't publish
+leak sync push                             # publish this device
+leak sync disable                          # stop; local data untouched
+```
+
+Merging is per-record and backed by a stored merge base, so a one-sided change
+fast-forwards and only a both-sides edit counts as a conflict. Full guide:
+[sync](sync.md).
+
+## Shell completion
+
+```bash
+leak completion zsh > "${fpath[1]}/_leak"   # bash | zsh | fish | powershell
+```
+
+Completion knows your subscription ids, so `leak show <TAB>` lists them by name
+and status, and `leak restore <TAB>` lists your snapshots.
 
 ## Getting help
 
 ```bash
-leak --help               # all commands
+leak --help               # all commands, grouped by workflow
 leak <command> --help     # flags for one command
 leak --version            # build version
+leak doctor               # is my data healthy?
 ```

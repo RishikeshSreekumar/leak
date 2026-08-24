@@ -43,7 +43,8 @@ leak --version
 ## Quick start
 
 ```bash
-leak add                      # interactive wizard
+leak scan statement.csv       # find recurring charges in a bank export
+leak add                      # or add one by hand (interactive wizard)
 leak list                     # what am I paying for?
 leak stats                    # monthly spend, by category
 leak due                      # renewals in the next 30 days
@@ -66,11 +67,24 @@ Full walkthrough: [`docs/usage.md`](docs/usage.md).
 
 | Group | Commands |
 |-------|----------|
-| Manage | `add` `list` `show <id>` `edit <id>` `remove <id> [--hard]` |
+| Manage | `add` `list` `show <id>` `edit <id>` `remove <id> [--hard]` `tui` |
 | Analytics | `stats` `due [--days N]` `insights` `categories` `payment-methods` |
 | Audit | `review` `mark <id>` `sweep` `gc [--apply]` |
 | Profile | `profile` `category add/remove` `payment add/remove` |
-| Data | `import <file>` `export [--format csv\|json\|yaml]` |
+| Data | `scan <statement.csv>` `import <file>` `export` `backup` `restore` `doctor` `sync` |
+
+Read commands take `--json`, so Leak composes with `jq` and anything else:
+
+```bash
+leak list --json | jq '.[] | select(.currency == "USD") | .name'
+leak sweep --json | jq '.savings.yearly'
+```
+
+Tab completion (including subscription ids) comes from cobra:
+
+```bash
+leak completion zsh > "${fpath[1]}/_leak"     # bash | zsh | fish | powershell
+```
 
 ## How it works
 
@@ -84,6 +98,43 @@ Full walkthrough: [`docs/usage.md`](docs/usage.md).
   your `default_currency`. The FX rate at billing time is stored on each record
   (via [frankfurter.dev](https://frankfurter.dev)) so historical spending stays
   stable. Offline lookups fall back to the last known rate, flagged as estimated.
+- **Safe by default.** Writes are atomic, the config dir is owner-only, and
+  anything bulk or destructive snapshots the registry first — one `leak restore`
+  away.
+
+## Start from your bank statement
+
+Tracking dies if you have to hand-enter everything, so Leak reads the statement
+you already have:
+
+```bash
+leak scan statement.csv           # dry run — what looks recurring?
+leak scan statement.csv --apply   # add the untracked ones
+```
+
+It groups the export by merchant, keeps what charges on a steady cadence for a
+steady amount, and reports each candidate with a confidence score, detected
+cycle, and next renewal. Real-world exports are handled: metadata rows above the
+header, debit/credit column pairs or a single signed amount, day-first and
+month-first dates, thousands separators, currency symbols, `DR`/`CR` markers.
+Nothing is written without `--apply`, and anything you already track is skipped.
+
+## Sync across devices
+
+Opt-in, no account, no server of ours:
+
+```bash
+leak sync init --dir ~/Dropbox/leak            # or --git git@github.com:me/subs.git
+leak sync                                      # fetch → merge → publish
+leak sync status                               # what would change?
+```
+
+The wire format is the same JSON `leak export` emits, so any tool or LLM can
+read it. Merging is per-record against a stored merge base, so a change on one
+device fast-forwards cleanly and only a genuine both-sides edit is a conflict —
+resolved by last-writer-wins, or refused for you to decide with
+`--strategy manual`. Hard deletes propagate as tombstones instead of being
+resurrected. Full guide: [`docs/sync.md`](docs/sync.md).
 
 ## Configuration
 
@@ -94,24 +145,27 @@ default_currency: INR
 exchange_rate_provider: frankfurter.dev
 review_after_days: 90
 stale_after_days: 180
+auto_backup: true               # snapshot before bulk/destructive changes
+backup_keep: 20                 # retained snapshots (-1 keeps everything)
 categories: [Development, Entertainment, Storage, Utilities, AI]
 payment_methods: [ICICI Amazon Pay, HDFC Millennia, UPI]
+sync:
+  kind: dir                     # dir | git
+  target: /Users/me/Dropbox/leak
+  strategy: lww                 # lww | manual
 ```
 
-## Cloud sync (designed, not yet built)
-
-Sync is an opt-in seam, not a requirement — local stays the source of truth. The
-wire format is JSON (identical to `leak export --format json`), so any external
-tool or LLM can already read your registry today. Every subscription carries
-`updated_at`/`rev` so a future backend (git, object store, REST, or an MCP
-server exposing subs to an LLM) can merge field-agnostically with last-writer-wins.
-See [`internal/sync`](internal/sync/sync.go) for the full design.
+Not sure the registry is healthy? `leak doctor` checks the config dir, the
+schema, the sync target, and every record — `leak doctor --fix` applies the
+repairs that have exactly one right answer.
 
 ## Documentation
 
 - [Installation](docs/installation.md) — every install method + PATH notes
 - [Updating](docs/updating.md) — how to upgrade per install method
 - [Usage](docs/usage.md) — full command walkthrough
+- [Data management](docs/data.md) — import, scan, backup, restore, doctor
+- [Sync](docs/sync.md) — transports, merge rules, conflicts
 - [Contributing](CONTRIBUTING.md) — dev setup, conventions, hermetic tests
 
 ## Development
