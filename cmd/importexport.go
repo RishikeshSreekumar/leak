@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/RishikeshSreekumar/leak/internal/detect"
 	"github.com/RishikeshSreekumar/leak/internal/model"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -69,10 +70,15 @@ func writeCSV(d *Deps, subs []model.Subscription) error {
 }
 
 func newImportCmd() *cobra.Command {
-	return &cobra.Command{
+	var dryRun, update bool
+	cmd := &cobra.Command{
 		Use:   "import <file>",
 		Short: "Import subscriptions from csv|json|yaml (merged, deduped by id/name).",
-		Args:  cobra.ExactArgs(1),
+		Long: "Merge subscriptions from a file into the registry. Existing records are left " +
+			"alone unless --update is given. The registry is snapshotted first, so an import " +
+			"that goes wrong is one `leak restore` away.",
+		Example: "  leak import subs.csv --dry-run\n  leak import subs.json --update",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d := depsFrom(cmd)
 			b, err := os.ReadFile(args[0])
@@ -83,12 +89,52 @@ func newImportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			added, skipped := mergeImport(d, incoming)
-			fmt.Fprintf(d.Out, "%s Imported %d subscription(s), skipped %d duplicate(s).\n",
-				d.Render.Accent("✓"), added, skipped)
+			if len(incoming) == 0 {
+				fmt.Fprintln(d.Out, d.Render.Muted("Nothing to import — the file has no subscriptions."))
+				return nil
+			}
+			if dryRun {
+				res := planImport(d, incoming)
+				for _, p := range res {
+					fmt.Fprintf(d.Out, "%-10s %s\n", p.action, p.name)
+				}
+				fmt.Fprintf(d.Out, "\n%s\n", d.Render.Muted("Dry run — nothing was written."))
+				return nil
+			}
+			if err := autoBackup(d, "import"); err != nil {
+				return err
+			}
+			added, updated, skipped := mergeImport(d, incoming, update)
+			fmt.Fprintf(d.Out, "%s Imported %d, updated %d, skipped %d duplicate(s).\n",
+				d.Render.Accent("✓"), added, updated, skipped)
+			autoSync(cmd)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would be imported without writing")
+	cmd.Flags().BoolVar(&update, "update", false, "overwrite existing subscriptions that match by id or name")
+	return cmd
+}
+
+// importPlan is one line of a dry-run report.
+type importPlan struct{ action, name string }
+
+// planImport reports what an import would do, without touching the store.
+func planImport(d *Deps, incoming []model.Subscription) []importPlan {
+	data, err := d.Store.Load()
+	if err != nil {
+		return nil
+	}
+	existing := indexRegistry(data.Subscriptions)
+	out := make([]importPlan, 0, len(incoming))
+	for _, s := range incoming {
+		if _, dup := matchExisting(existing, s); dup {
+			out = append(out, importPlan{"duplicate", s.Name})
+			continue
+		}
+		out = append(out, importPlan{"add", s.Name})
+	}
+	return out
 }
 
 // parseImport picks a decoder based on file extension.
@@ -154,37 +200,96 @@ func parseCSV(b []byte) ([]model.Subscription, error) {
 	return out, nil
 }
 
-// mergeImport adds incoming subscriptions, skipping ones whose id or name
-// already exists in the registry.
-func mergeImport(d *Deps, incoming []model.Subscription) (added, skipped int) {
+// registryIndex maps both ids and normalized names onto existing records, so an
+// import can recognise "Netflix", "netflix", and "NETFLIX.COM" as the same
+// subscription the user already tracks.
+type registryIndex struct {
+	byID   map[string]model.Subscription
+	byName map[string]model.Subscription
+}
+
+func indexRegistry(subs []model.Subscription) registryIndex {
+	idx := registryIndex{
+		byID:   make(map[string]model.Subscription, len(subs)),
+		byName: make(map[string]model.Subscription, len(subs)*2),
+	}
+	for _, s := range subs {
+		idx.byID[s.ID] = s
+		idx.byName[strings.ToLower(strings.TrimSpace(s.Name))] = s
+		if k := detect.MerchantKey(s.Name); k != "" {
+			idx.byName[k] = s
+		}
+	}
+	return idx
+}
+
+// matchExisting finds the registry record an incoming subscription refers to.
+func matchExisting(idx registryIndex, s model.Subscription) (model.Subscription, bool) {
+	if s.ID != "" {
+		if got, ok := idx.byID[s.ID]; ok {
+			return got, true
+		}
+	}
+	if got, ok := idx.byName[strings.ToLower(strings.TrimSpace(s.Name))]; ok {
+		return got, true
+	}
+	if k := detect.MerchantKey(s.Name); k != "" {
+		if got, ok := idx.byName[k]; ok {
+			return got, true
+		}
+	}
+	return model.Subscription{}, false
+}
+
+// mergeImport adds incoming subscriptions. Matching records are skipped, or
+// overwritten when update is set (keeping the existing id and billing history).
+func mergeImport(d *Deps, incoming []model.Subscription, update bool) (added, updated, skipped int) {
 	data, err := d.Store.Load()
 	if err != nil {
-		return 0, 0
+		return 0, 0, 0
 	}
-	byName := map[string]bool{}
-	byID := map[string]bool{}
-	for _, s := range data.Subscriptions {
-		byName[strings.ToLower(s.Name)] = true
-		byID[s.ID] = true
-	}
+	idx := indexRegistry(data.Subscriptions)
+	now := d.Clock.Now()
 	for _, s := range incoming {
-		if byName[strings.ToLower(s.Name)] || (s.ID != "" && byID[s.ID]) {
-			skipped++
-			continue
-		}
-		s.ID = "" // let store assign a unique slug
 		if s.Currency == "" {
 			s.Currency = d.Profile.DefaultCurrency
 		}
 		if s.BillingCycle == "" {
 			s.BillingCycle = model.CycleMonthly
 		}
-		s.Touch(d.Clock.Now())
-		if _, err := d.Store.AddSub(s); err != nil {
+		if s.Status == "" {
+			s.Status = model.StatusActive
+		}
+		if existing, dup := matchExisting(idx, s); dup {
+			if !update {
+				skipped++
+				continue
+			}
+			merged := s
+			merged.ID = existing.ID
+			// Billing history is Leak's own FX record; an import never owns it.
+			merged.BillingHistory = existing.BillingHistory
+			merged.Rev = existing.Rev
+			merged.Touch(now)
+			if err := d.Store.UpdateSub(merged); err != nil {
+				continue
+			}
+			idx.byName[strings.ToLower(strings.TrimSpace(merged.Name))] = merged
+			updated++
 			continue
 		}
-		byName[strings.ToLower(s.Name)] = true
+		s.ID = "" // let the store assign a unique slug
+		s.Touch(now)
+		saved, err := d.Store.AddSub(s)
+		if err != nil {
+			continue
+		}
+		idx.byID[saved.ID] = saved
+		idx.byName[strings.ToLower(strings.TrimSpace(saved.Name))] = saved
+		if k := detect.MerchantKey(saved.Name); k != "" {
+			idx.byName[k] = saved
+		}
 		added++
 	}
-	return added, skipped
+	return added, updated, skipped
 }
