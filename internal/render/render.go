@@ -69,7 +69,8 @@ func (s *Styler) Heading(t string) string { return s.style(s.heading, t) }
 // List renders the subscription table (spec §5.2).
 func (s *Styler) List(subs []model.Subscription) string {
 	if len(subs) == 0 {
-		return s.Muted("No subscriptions yet. Add one with `leak add`.") + "\n"
+		return s.Muted("No subscriptions yet. Add one with `leak add`, or find them "+
+			"automatically with `leak scan <statement.csv>`.") + "\n"
 	}
 	nameW := 4
 	for _, sub := range subs {
