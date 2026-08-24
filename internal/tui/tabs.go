@@ -13,7 +13,7 @@ import (
 // headerLines and footerLines are the fixed chrome heights used to size the
 // scrollable body.
 const (
-	headerLines = 3
+	headerLines = 7
 	footerLines = 2
 )
 
@@ -176,10 +176,36 @@ func (m Model) body() string {
 	return ""
 }
 
-// header is the title line plus the tab bar.
+// header is the boxed LEAK_SYS banner plus the tab bar.
 func (m Model) header() string {
-	title := m.rndr.Heading("leak") + m.rndr.Muted("  Mark. Sweep. Save.")
-	return title + "\n" + m.tabBar() + "\n"
+	return m.banner() + "\n" + m.tabBar() + "\n"
+}
+
+// banner renders the pixel-logo box: a small faucet-drip glyph with the LEAK
+// label, joined to the LEAK_SYS title and tagline, wrapped in a rounded border.
+func (m Model) banner() string {
+	green := lipgloss.Color("42")
+
+	logoStyle := lipgloss.NewStyle()
+	titleStyle := lipgloss.NewStyle()
+	tagStyle := lipgloss.NewStyle()
+	borderStyle := lipgloss.NewStyle()
+	if m.cfg.Color {
+		logoStyle = logoStyle.Foreground(green).Bold(true)
+		titleStyle = titleStyle.Foreground(green).Bold(true)
+		tagStyle = tagStyle.Foreground(lipgloss.Color("245"))
+		borderStyle = borderStyle.Foreground(green)
+	}
+
+	logo := logoStyle.Render("▛▀▜\n▙▄▟\nLEAK")
+	text := lipgloss.JoinVertical(lipgloss.Left,
+		titleStyle.Render("LEAK_SYS"),
+		tagStyle.Render("Mark. :: Sweep. :: Save."),
+		"",
+	)
+	inner := lipgloss.JoinHorizontal(lipgloss.Top, logo, "  ", text)
+
+	return borderStyle.Border(lipgloss.RoundedBorder()).Padding(0, 1).Render(inner)
 }
 
 // tabBar renders the tab labels, highlighting the active one.
