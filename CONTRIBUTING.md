@@ -30,6 +30,26 @@ Requires **Go 1.26+** (see `go.mod`).
 4. Open a pull request against `main`. CI runs `go test ./...` and `go vet ./...`
    on every PR — keep it green.
 
+## Project layout
+
+```
+cmd/                cobra command tree (one file per command group)
+internal/model/     domain types + on-disk schema and migrations
+internal/store/     YAML persistence behind a Store interface
+internal/insights/  aggregation for stats/insights
+internal/audit/     mark-and-sweep (zombies, savings)
+internal/detect/    bank-statement parsing + recurring-charge detection
+internal/sync/      snapshots, merge engine, dir/git transports
+internal/backup/    timestamped snapshots, retention, git commit
+internal/render/    data → terminal strings (golden-tested)
+internal/tui/       bubbletea dashboard
+internal/fx/        exchange rates (HTTP + cache + static test provider)
+```
+
+Dependencies point one way: `cmd` and `tui` sit on top, `model` sits at the
+bottom. If a change makes a lower layer import a higher one, it belongs
+somewhere else.
+
 ## Coding conventions
 
 - **Format** with `gofmt` (`make fmt`) — CI assumes formatted code.
@@ -62,6 +82,29 @@ go test ./internal/render -update
 
 Review the diff before committing — an unexpected golden change usually means a
 real regression.
+
+### Sync and statement tests
+
+Two areas have their own conventions:
+
+- **Sync** (`internal/sync`) — tests wire two `device`s over a real
+  `DirTransport` in temp directories and assert they converge. The git transport
+  test creates a bare repo locally and skips when git is absent. Never reach for
+  the network.
+- **Statement detection** (`internal/detect`) — add a fixture that mirrors the
+  real export shape you hit (header preamble, column names, date order, sign
+  convention). If your bank's format doesn't parse, a failing test with a
+  redacted sample is the most useful bug report you can send.
+
+## Good first contributions
+
+- A statement format Leak mis-parses — see `internal/detect/parse.go`; new
+  column synonyms and date layouts are one-liners.
+- A merchant missing from the name/category table in
+  `internal/detect/detect.go`.
+- A `leak doctor` check for a mistake you actually made.
+- A new sync transport: implement `sync.Transport` (two methods) and register it
+  in `sync.NewTransport`.
 
 ## Reporting bugs / requesting features
 

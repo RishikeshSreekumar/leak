@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest something Leak should do.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Leak stays terminal-first, local-first, and dependency-light. Proposals
+        that keep the registry canonical on the user's machine are the easiest
+        to say yes to — see `docs/product-spec.md` for what is already planned.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that Leak makes hard today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: A command sketch is worth a paragraph.
+      placeholder: "leak remind --days 3   # notify before a renewal"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Existing commands, scripts around `--json`, manual workarounds.

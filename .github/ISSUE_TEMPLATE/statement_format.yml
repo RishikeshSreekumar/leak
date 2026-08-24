@@ -1,0 +1,47 @@
+name: Statement format not detected
+description: "`leak scan` missed a subscription, or could not read your bank export."
+labels: [detector, bank-csv]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Detection accuracy depends on real statement shapes. A redacted sample is
+        the single most useful thing you can send — it becomes a test case.
+
+  - type: input
+    id: bank
+    attributes:
+      label: Bank or card issuer
+      placeholder: "HDFC Bank credit card export / Chase / Monzo …"
+    validations:
+      required: true
+
+  - type: textarea
+    id: sample
+    attributes:
+      label: Redacted sample rows
+      description: >
+        The header row plus 3–5 transaction rows. **Replace real merchant names,
+        amounts, and account numbers** — the shape is what matters, not your data.
+      render: csv
+      placeholder: |
+        Txn Date,Narration,Withdrawal Amt,Deposit Amt,Closing Balance
+        12/07/2026,UPI/MERCHANT ONE/1111,649.00,,25000.00
+        13/07/2026,SALARY,,50000.00,75000.00
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have been detected
+      placeholder: "A ₹649 monthly subscription from the rows dated the 12th of each month."
+    validations:
+      required: true
+
+  - type: textarea
+    id: got
+    attributes:
+      label: What Leak reported
+      description: Output of `leak scan <file>` (and the error, if it failed).
+      render: text

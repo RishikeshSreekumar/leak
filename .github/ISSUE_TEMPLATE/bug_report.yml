@@ -1,0 +1,41 @@
+name: Bug report
+description: Something behaved differently than you expected.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran, what you expected, and what you got.
+      placeholder: |
+        $ leak sweep
+        expected: Netflix flagged as a zombie
+        got: "No zombies. Clean house."
+    validations:
+      required: true
+
+  - type: textarea
+    id: version
+    attributes:
+      label: Version and platform
+      description: Output of `leak --version`, plus your OS and architecture.
+      placeholder: "leak version 0.2.0 · macOS 15.5 arm64"
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: leak doctor
+      description: >
+        Output of `leak doctor` if the problem involves your data. Redact
+        anything you would rather not share — subscription names are enough.
+      render: text
+
+  - type: checkboxes
+    id: data
+    attributes:
+      label: Before you post
+      options:
+        - label: I have removed anything private from the output above.
+          required: true
