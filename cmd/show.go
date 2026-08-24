@@ -8,7 +8,7 @@ import (
 )
 
 func newShowCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "show <id>",
 		Short: "Show full detail for a subscription.",
 		Args:  cobra.ExactArgs(1),
@@ -17,6 +17,9 @@ func newShowCmd() *cobra.Command {
 			sub, err := d.Store.GetSub(args[0])
 			if err != nil {
 				return err
+			}
+			if jsonRequested(cmd) {
+				return writeJSON(d, sub)
 			}
 			out := d.Out
 			fmt.Fprintf(out, "%s (%s)\n", d.Render.Accent(sub.Name), sub.ID)
@@ -47,4 +50,6 @@ func newShowCmd() *cobra.Command {
 			return nil
 		},
 	}
+	jsonFlag(cmd)
+	return cmd
 }

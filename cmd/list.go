@@ -22,11 +22,15 @@ func newListCmd() *cobra.Command {
 			if !all {
 				subs = activeOnly(subs)
 			}
+			if jsonRequested(cmd) {
+				return writeJSON(d, subs)
+			}
 			fmt.Fprint(d.Out, d.Render.List(subs))
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "include cancelled/paused subscriptions")
+	jsonFlag(cmd)
 	return cmd
 }
 

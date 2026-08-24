@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/RishikeshSreekumar/leak/internal/clock"
 	"github.com/RishikeshSreekumar/leak/internal/fx"
@@ -76,7 +77,72 @@ func NewRoot(d *Deps) *cobra.Command {
 		newBackupCmd(), newRestoreCmd(), newDoctorCmd(),
 		newSyncCmd(),
 	)
+	// Group the commands so `leak --help` reads as a workflow rather than an
+	// alphabetical dump.
+	root.AddGroup(
+		&cobra.Group{ID: groupManage, Title: "Manage:"},
+		&cobra.Group{ID: groupAnalyze, Title: "Analyze:"},
+		&cobra.Group{ID: groupAudit, Title: "Audit (mark & sweep):"},
+		&cobra.Group{ID: groupData, Title: "Data:"},
+	)
+	assignGroups(root)
 	return root
+}
+
+// Command group ids used in help output.
+const (
+	groupManage  = "manage"
+	groupAnalyze = "analyze"
+	groupAudit   = "audit"
+	groupData    = "data"
+)
+
+// assignGroups labels each command with its help group and wires subscription-id
+// completion onto the commands that take one, so `leak show <TAB>` works in any
+// shell that has `leak completion` installed.
+func assignGroups(root *cobra.Command) {
+	groups := map[string]string{
+		"add": groupManage, "list": groupManage, "show": groupManage,
+		"edit": groupManage, "remove": groupManage, "tui": groupManage,
+
+		"stats": groupAnalyze, "due": groupAnalyze, "insights": groupAnalyze,
+		"categories": groupAnalyze, "payment-methods": groupAnalyze,
+
+		"review": groupAudit, "mark": groupAudit, "sweep": groupAudit, "gc": groupAudit,
+
+		"import": groupData, "export": groupData, "scan": groupData,
+		"backup": groupData, "restore": groupData, "sync": groupData,
+		"doctor": groupData, "profile": groupData,
+	}
+	takesID := map[string]bool{"show": true, "edit": true, "remove": true, "mark": true}
+	for _, c := range root.Commands() {
+		if g, ok := groups[c.Name()]; ok {
+			c.GroupID = g
+		}
+		if takesID[c.Name()] {
+			c.ValidArgsFunction = completeSubIDs
+		}
+	}
+}
+
+// completeSubIDs offers subscription ids (with the name as the description) for
+// shell completion.
+func completeSubIDs(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) > 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	d := depsFrom(cmd)
+	data, err := d.Store.Load()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveError
+	}
+	out := make([]string, 0, len(data.Subscriptions))
+	for _, s := range data.Subscriptions {
+		if strings.HasPrefix(s.ID, toComplete) {
+			out = append(out, s.ID+"\t"+s.Name+" ("+s.Status+")")
+		}
+	}
+	return out, cobra.ShellCompDirectiveNoFileComp
 }
 
 // realDeps builds production dependencies from the environment.

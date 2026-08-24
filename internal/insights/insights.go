@@ -12,42 +12,43 @@ import (
 )
 
 // Report is the full aggregation over the active registry, all monetary values
-// expressed in the profile's default currency.
+// expressed in the profile's default currency. The JSON tags are a public
+// contract: `leak stats --json` output is meant to be piped into other tools.
 type Report struct {
-	Currency        string
-	MonthlyTotal    float64
-	YearlyTotal     float64
-	ByCategory      []CategorySpend
-	ByPaymentMethod []MethodSpend
-	Top             []NamedSpend
-	Heatmap         []WeekBucket
+	Currency        string          `json:"currency"`
+	MonthlyTotal    float64         `json:"monthly_total"`
+	YearlyTotal     float64         `json:"yearly_total"`
+	ByCategory      []CategorySpend `json:"by_category"`
+	ByPaymentMethod []MethodSpend   `json:"by_payment_method"`
+	Top             []NamedSpend    `json:"top"`
+	Heatmap         []WeekBucket    `json:"heatmap"`
 }
 
 // CategorySpend is monthly spend for a category with its share of the total.
 type CategorySpend struct {
-	Category string
-	Monthly  float64
-	Percent  float64
+	Category string  `json:"category"`
+	Monthly  float64 `json:"monthly"`
+	Percent  float64 `json:"percent"`
 }
 
 // MethodSpend is monthly spend and count for a payment method.
 type MethodSpend struct {
-	Method  string
-	Count   int
-	Monthly float64
+	Method  string  `json:"method"`
+	Count   int     `json:"count"`
+	Monthly float64 `json:"monthly"`
 }
 
 // NamedSpend is a subscription's monthly spend (for top-N lists).
 type NamedSpend struct {
-	ID      string
-	Name    string
-	Monthly float64
+	ID      string  `json:"id"`
+	Name    string  `json:"name"`
+	Monthly float64 `json:"monthly"`
 }
 
 // WeekBucket counts upcoming renewals within a forward week window.
 type WeekBucket struct {
-	Label string
-	Count int
+	Label string `json:"label"`
+	Count int    `json:"count"`
 }
 
 // convertMonthly returns a subscription's normalized monthly cost in target

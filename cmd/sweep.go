@@ -10,7 +10,7 @@ import (
 )
 
 func newSweepCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "sweep",
 		Short: "Detect zombie subscriptions and potential savings.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -20,10 +20,15 @@ func newSweepCmd() *cobra.Command {
 				return err
 			}
 			zs, sav := zombiesWithSavings(d, data.Subscriptions)
+			if jsonRequested(cmd) {
+				return writeJSON(d, map[string]any{"zombies": zs, "savings": sav})
+			}
 			fmt.Fprint(d.Out, d.Render.Sweep(zs, d.Profile.DefaultCurrency, sav))
 			return nil
 		},
 	}
+	jsonFlag(cmd)
+	return cmd
 }
 
 func newGCCmd() *cobra.Command {

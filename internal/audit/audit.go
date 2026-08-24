@@ -13,9 +13,9 @@ import (
 // Zombie is an active subscription unconfirmed for longer than the stale
 // threshold — a cancellation candidate.
 type Zombie struct {
-	Sub            model.Subscription
-	DaysSince      int     // days since last confirmation (or since add if never)
-	MonthlySavings float64 // normalized monthly amount, original currency
+	Sub            model.Subscription `json:"subscription"`
+	DaysSince      int                `json:"days_since"`      // since last confirmation (or since add if never)
+	MonthlySavings float64            `json:"monthly_savings"` // normalized monthly amount, original currency
 }
 
 // confirmationAnchor returns the date we measure staleness from: last_confirmed
@@ -70,8 +70,8 @@ func NeedsReview(subs []model.Subscription, now time.Time, reviewDays int) []mod
 
 // Savings holds roll-up totals in the caller's chosen currency.
 type Savings struct {
-	Monthly float64
-	Yearly  float64
+	Monthly float64 `json:"monthly"`
+	Yearly  float64 `json:"yearly"`
 }
 
 // SavingsFor sums per-zombie monthly savings using convert to bring each into
