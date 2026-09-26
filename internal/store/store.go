@@ -89,11 +89,23 @@ func (s *YAMLStore) bootstrap() error {
 		return err
 	}
 	if _, err := os.Stat(s.path(configFile)); errors.Is(err, os.ErrNotExist) {
-		if err := s.SaveProfile(model.DefaultProfile()); err != nil {
+		if err := s.SaveProfile(firstRunProfile()); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// firstRunProfile builds the initial config.yaml, picking the reporting
+// currency from the shell locale (LC_ALL, LC_MONETARY, LANG in that order) so a
+// user in Berlin starts in EUR and one in Mumbai in INR. USD when unknown.
+func firstRunProfile() model.Profile {
+	for _, key := range []string{"LC_ALL", "LC_MONETARY", "LANG"} {
+		if c := model.CurrencyForLocale(os.Getenv(key)); c != "" {
+			return model.DefaultProfileFor(c)
+		}
+	}
+	return model.DefaultProfile()
 }
 
 // Load reads the subscription registry (empty registry if the file is absent).

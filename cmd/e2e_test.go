@@ -26,6 +26,7 @@ func newHarness(t *testing.T) *harness {
 	st, err := store.NewAt(t.TempDir())
 	require.NoError(t, err)
 	prof, _ := st.LoadProfile()
+	prof.DefaultCurrency = "INR" // the assertions below are written in rupees
 	buf := &bytes.Buffer{}
 	return &harness{
 		buf: buf,
@@ -167,4 +168,98 @@ func TestE2EDueWindow(t *testing.T) {
 	due := h.run(t, "due")
 	assert.Contains(t, due, "Soon")
 	assert.NotContains(t, due, "Later")
+}
+
+func TestE2ERenewalRollsForwardInListAndDue(t *testing.T) {
+	h := newHarness(t) // clock: 2026-07-15
+	h.run(t, "add", "--name", "Old", "--amount", "100", "--currency", "INR", "--renewal", "2026-01-20")
+	list := h.run(t, "list")
+	assert.Contains(t, list, "2026-07-20", "list shows the rolled-forward renewal")
+	assert.Contains(t, list, "  old", "list shows the id")
+	assert.Contains(t, h.run(t, "due"), "Old")
+
+	show := h.run(t, "show", "old")
+	assert.Contains(t, show, "Next renewal:  2026-07-20")
+	assert.Contains(t, show, "anchored on 2026-01-20")
+
+	out := h.run(t, "doctor")
+	assert.Contains(t, out, "renewal anchor")
+	h.run(t, "doctor", "--fix")
+	sub, _ := h.deps.Store.GetSub("old")
+	assert.Equal(t, "2026-07-20", sub.RenewalDate.String(), "--fix persists the roll")
+}
+
+func TestE2EResolveByNameAndPrefix(t *testing.T) {
+	h := newHarness(t)
+	h.run(t, "add", "--name", "Netflix", "--amount", "649", "--currency", "INR")
+	h.run(t, "add", "--name", "Notion", "--amount", "8", "--currency", "USD")
+
+	assert.Contains(t, h.run(t, "show", "NETFLIX"), "Netflix (netflix)")
+	assert.Contains(t, h.run(t, "show", "noti"), "Notion (notion)")
+	assert.Contains(t, h.run(t, "mark", "netf"), "Confirmed netflix")
+
+	root := NewRoot(h.deps)
+	root.SetOut(h.buf)
+	root.SetArgs([]string{"show", "n"})
+	err := root.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "netflix, notion")
+
+	root = NewRoot(h.deps)
+	root.SetArgs([]string{"show", "nope"})
+	assert.ErrorContains(t, root.Execute(), "not found")
+}
+
+func TestE2ETrialAndURL(t *testing.T) {
+	h := newHarness(t) // 2026-07-15
+	h.run(t, "add", "--name", "Cursor", "--amount", "20", "--currency", "USD",
+		"--renewal", "2026-07-29", "--trial-ends", "2026-07-29", "--url", "https://cursor.com/settings")
+
+	sub, err := h.deps.Store.GetSub("cursor")
+	require.NoError(t, err)
+	assert.Empty(t, sub.BillingHistory, "no charge has happened during a trial")
+	assert.Equal(t, "https://cursor.com/settings", sub.URL)
+
+	due := h.run(t, "due", "--days", "14")
+	assert.Contains(t, due, "trial ends")
+	assert.Contains(t, h.run(t, "list"), "trial Jul 29")
+	assert.Contains(t, h.run(t, "open", "cursor", "--print"), "https://cursor.com/settings")
+
+	opened := ""
+	launchBrowser = func(u string) error { opened = u; return nil }
+	t.Cleanup(func() { launchBrowser = nil })
+	h.run(t, "open", "cursor")
+	assert.Equal(t, "https://cursor.com/settings", opened)
+}
+
+func TestE2EDueQuiet(t *testing.T) {
+	h := newHarness(t)
+	root := NewRoot(h.deps)
+	root.SetOut(h.buf)
+	root.SetArgs([]string{"due", "--quiet"})
+	require.NoError(t, root.Execute(), "nothing due → silent, exit 0")
+	assert.Empty(t, h.buf.String())
+
+	h.run(t, "add", "--name", "Soon", "--amount", "100", "--currency", "INR", "--renewal", "2026-07-16")
+	h.buf.Reset()
+	root = NewRoot(h.deps)
+	root.SetOut(h.buf)
+	root.SetArgs([]string{"due", "--quiet", "--days", "7"})
+	err := root.Execute()
+	assert.ErrorIs(t, err, ErrSomethingDue)
+	assert.Equal(t, "leak: 1 due in 7d — Soon ₹100 tomorrow\n", h.buf.String())
+}
+
+func TestE2EProfileSubcommandsAndHiddenAliases(t *testing.T) {
+	h := newHarness(t)
+	h.run(t, "profile", "category", "add", "Gaming")
+	h.run(t, "profile", "payment", "add", "Visa")
+	prof, _ := h.deps.Store.LoadProfile()
+	assert.Contains(t, prof.Categories, "Gaming")
+	assert.Equal(t, []string{"Visa"}, prof.PaymentMethods, "fresh profiles start with no payment methods")
+
+	help := h.run(t, "--help")
+	assert.NotContains(t, help, "payment-methods", "duplicate analytics commands are hidden")
+	h.run(t, "add", "--name", "Steam", "--amount", "100", "--currency", "INR", "--category", "Gaming")
+	assert.Contains(t, h.run(t, "categories"), "Gaming", "…but still run")
 }

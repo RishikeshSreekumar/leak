@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -69,10 +70,13 @@ func NewRoot(d *Deps) *cobra.Command {
 
 	root.AddCommand(
 		newTUICmd(),
-		newAddCmd(), newListCmd(), newShowCmd(), newEditCmd(), newRemoveCmd(),
+		newAddCmd(), newListCmd(), newShowCmd(), newEditCmd(), newRemoveCmd(), newOpenCmd(),
 		newDueCmd(), newStatsCmd(), newInsightsCmd(), newCategoriesCmd(), newPaymentMethodsCmd(),
 		newReviewCmd(), newMarkCmd(), newSweepCmd(), newGCCmd(),
-		newProfileCmd(), newCurrencyCmd(), newCategoryCmd(), newPaymentCmd(),
+		newProfileCmd(),
+		// The profile mutators live under `leak profile …`; the bare forms stay
+		// as hidden aliases so existing scripts keep working.
+		hidden(newCurrencyCmd()), hidden(newCategoryCmd()), hidden(newPaymentCmd()),
 		newImportCmd(), newExportCmd(), newScanCmd(),
 		newBackupCmd(), newRestoreCmd(), newDoctorCmd(),
 		newSyncCmd(),
@@ -89,6 +93,12 @@ func NewRoot(d *Deps) *cobra.Command {
 	return root
 }
 
+// hidden marks a command as a back-compat alias that stays out of `--help`.
+func hidden(c *cobra.Command) *cobra.Command {
+	c.Hidden = true
+	return c
+}
+
 // Command group ids used in help output.
 const (
 	groupManage  = "manage"
@@ -103,7 +113,7 @@ const (
 func assignGroups(root *cobra.Command) {
 	groups := map[string]string{
 		"add": groupManage, "list": groupManage, "show": groupManage,
-		"edit": groupManage, "remove": groupManage, "tui": groupManage,
+		"edit": groupManage, "remove": groupManage, "open": groupManage, "tui": groupManage,
 
 		"stats": groupAnalyze, "due": groupAnalyze, "insights": groupAnalyze,
 		"categories": groupAnalyze, "payment-methods": groupAnalyze,
@@ -114,7 +124,7 @@ func assignGroups(root *cobra.Command) {
 		"backup": groupData, "restore": groupData, "sync": groupData,
 		"doctor": groupData, "profile": groupData,
 	}
-	takesID := map[string]bool{"show": true, "edit": true, "remove": true, "mark": true}
+	takesID := map[string]bool{"show": true, "edit": true, "remove": true, "mark": true, "open": true}
 	for _, c := range root.Commands() {
 		if g, ok := groups[c.Name()]; ok {
 			c.GroupID = g
@@ -171,7 +181,9 @@ func realDeps(cmd *cobra.Command) (*Deps, error) {
 func Execute() {
 	root := NewRoot(nil)
 	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "leak: "+err.Error())
+		if !errors.Is(err, ErrSomethingDue) {
+			fmt.Fprintln(os.Stderr, "leak: "+err.Error())
+		}
 		os.Exit(1)
 	}
 }

@@ -15,7 +15,7 @@ func newEditCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d := depsFrom(cmd)
-			sub, err := d.Store.GetSub(args[0])
+			sub, err := resolveSub(d, args[0])
 			if err != nil {
 				return err
 			}
@@ -46,7 +46,7 @@ func newEditCmd() *cobra.Command {
 // anyFlagSet reports whether the user passed at least one editable flag.
 func anyFlagSet(cmd *cobra.Command) bool {
 	set := false
-	for _, name := range []string{"name", "amount", "currency", "cycle", "category", "payment", "renewal", "notes", "status"} {
+	for _, name := range subFlagNames {
 		if cmd.Flags().Changed(name) {
 			set = true
 		}

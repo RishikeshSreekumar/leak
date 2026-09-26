@@ -96,3 +96,20 @@ func TestInactiveExcluded(t *testing.T) {
 	r := Build([]model.Subscription{s}, profile(), fxp(), now)
 	assert.Zero(t, r.MonthlyTotal)
 }
+
+func TestUpcomingRollsForwardAndPrefersTrialEnd(t *testing.T) {
+	stale := active("Stale", "x", "m", "INR", 100, model.CycleMonthly, -40) // renewal 40 days ago
+	trial := active("Trial", "x", "m", "INR", 500, model.CycleMonthly, 20)
+	trial.TrialEnds = model.Date{Time: now.AddDate(0, 0, 5)}
+	gone := active("Gone", "x", "m", "INR", 100, model.CycleMonthly, 3)
+	gone.Status = model.StatusCancelled
+
+	items := UpcomingWithin([]model.Subscription{stale, trial, gone}, now, 30)
+	require.Len(t, items, 2)
+	assert.Equal(t, "Trial", items[0].Name)
+	assert.True(t, items[0].Trial)
+	assert.Equal(t, 5, items[0].Days)
+	assert.Equal(t, "Stale", items[1].Name, "a passed renewal rolls to next month instead of vanishing")
+	assert.False(t, items[1].Trial)
+	assert.Equal(t, now.AddDate(0, 0, -40).AddDate(0, 2, 0).Format("2006-01-02"), items[1].Date.String())
+}

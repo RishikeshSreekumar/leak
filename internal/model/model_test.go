@@ -52,7 +52,10 @@ func TestTouchBumpsRev(t *testing.T) {
 
 func TestDefaultProfile(t *testing.T) {
 	p := DefaultProfile()
-	assert.Equal(t, "INR", p.DefaultCurrency)
+	assert.Equal(t, "USD", p.DefaultCurrency)
+	assert.Empty(t, p.PaymentMethods, "payment methods are personal; none by default")
+	assert.Equal(t, "INR", DefaultProfileFor("inr").DefaultCurrency)
+	assert.Equal(t, "INR", DefaultProfileFor("INR").Currencies[0])
 	assert.Equal(t, 180, p.StaleAfterDays)
 	assert.Contains(t, p.Categories, "AI")
 }
@@ -68,4 +71,51 @@ func TestDataMigrateStampsVersion(t *testing.T) {
 	changed = d.Migrate()
 	assert.False(t, changed)
 	assert.Equal(t, SchemaVersion, d.Version)
+}
+
+func TestNextRenewalRollsForward(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 12, 0, 0, 0, time.UTC)
+	monthly := Subscription{RenewalDate: NewDate(2026, 1, 31), BillingCycle: CycleMonthly}
+	// Jan 31 → Feb 28 → Mar 31 … → Sep 30: the anchor day survives short months.
+	assert.Equal(t, "2026-09-30", monthly.NextRenewal(now).String())
+
+	yearly := Subscription{RenewalDate: NewDate(2024, 3, 1), BillingCycle: CycleYearly}
+	assert.Equal(t, "2027-03-01", yearly.NextRenewal(now).String())
+
+	weekly := Subscription{RenewalDate: NewDate(2026, 9, 3), BillingCycle: CycleWeekly}
+	assert.Equal(t, "2026-09-10", weekly.NextRenewal(now).String(), "today counts as upcoming")
+
+	future := Subscription{RenewalDate: NewDate(2026, 12, 25), BillingCycle: CycleMonthly}
+	assert.Equal(t, "2026-12-25", future.NextRenewal(now).String(), "a future date is left alone")
+
+	assert.True(t, Subscription{}.NextRenewal(now).IsZero())
+}
+
+func TestLastBilled(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 0, 0, 0, 0, time.UTC)
+	past := Subscription{RenewalDate: NewDate(2026, 8, 21), BillingCycle: CycleMonthly}
+	d, ok := LastBilled(past, now)
+	assert.True(t, ok)
+	assert.Equal(t, "2026-08-21", d.String())
+
+	upcoming := Subscription{RenewalDate: NewDate(2026, 9, 15), BillingCycle: CycleMonthly}
+	d, ok = LastBilled(upcoming, now)
+	assert.True(t, ok)
+	assert.Equal(t, "2026-08-15", d.String(), "one cycle before the next renewal")
+
+	trial := Subscription{RenewalDate: NewDate(2026, 9, 15), BillingCycle: CycleMonthly, TrialEnds: NewDate(2026, 9, 15)}
+	_, ok = LastBilled(trial, now)
+	assert.False(t, ok, "nothing has been charged during a trial")
+
+	_, ok = LastBilled(Subscription{}, now)
+	assert.False(t, ok)
+}
+
+func TestCurrencyForLocale(t *testing.T) {
+	assert.Equal(t, "INR", CurrencyForLocale("en_IN.UTF-8"))
+	assert.Equal(t, "EUR", CurrencyForLocale("de_DE"))
+	assert.Equal(t, "GBP", CurrencyForLocale("en-GB"))
+	assert.Equal(t, "", CurrencyForLocale("C"))
+	assert.Equal(t, "", CurrencyForLocale(""))
+	assert.Equal(t, "", CurrencyForLocale("en_XX.UTF-8"))
 }

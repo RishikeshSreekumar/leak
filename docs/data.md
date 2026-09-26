@@ -50,6 +50,22 @@ leak scan statement.csv --currency USD        # statement has no currency column
 Detection is a proposal, not a verdict. Review with `leak list` and fix any
 detail with `leak edit <id>`.
 
+#### Registry vs statement
+
+The same scan also runs the comparison the other way — what you track against
+what the statement shows — and prints a **Registry vs statement** section when
+they disagree:
+
+| Finding | Meaning | Usual fix |
+|---|---|---|
+| `no charge since <date>` | An active subscription appears in the statement but stopped being charged more than two cycles ago. | Probably cancelled at the provider: `leak remove <id>`. |
+| `marked cancelled but charged on <date>` | You cancelled it in Leak, the provider is still billing. | Chase the provider, or `leak edit <id> --status active` if you meant to keep it. |
+| `not in this statement at all` | An active subscription never shows up in a statement spanning at least two of its cycles. | Paid another way, or already gone. |
+
+Nothing here is applied automatically. In `--json` output these are the
+`mismatches` array, each with a `kind` of `stopped`, `still_charging`, or
+`unseen`.
+
 ### From a file
 
 ```bash

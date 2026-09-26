@@ -22,6 +22,55 @@ type Report struct {
 	ByPaymentMethod []MethodSpend   `json:"by_payment_method"`
 	Top             []NamedSpend    `json:"top"`
 	Heatmap         []WeekBucket    `json:"heatmap"`
+	// Upcoming is the next few charges (renewals and trial conversions), soonest first.
+	Upcoming []Upcoming `json:"upcoming"`
+}
+
+// Upcoming is one dated event Leak wants the user to see coming: a renewal, or
+// a trial converting to paid. Dates are rolled forward from the stored anchor,
+// so a subscription added months ago still surfaces on its next charge.
+type Upcoming struct {
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Date     model.Date `json:"date"`
+	Days     int        `json:"days"` // days from today (0 = today)
+	Amount   float64    `json:"amount"`
+	Currency string     `json:"currency"`
+	Trial    bool       `json:"trial"` // true when Date is a trial ending, not a renewal
+}
+
+// UpcomingWithin lists active subscriptions with a renewal or trial end inside
+// the next `days` days, soonest first. A subscription still in trial reports
+// the trial end instead of its renewal, since that is the day money moves.
+func UpcomingWithin(subs []model.Subscription, now time.Time, days int) []Upcoming {
+	var out []Upcoming
+	for _, s := range subs {
+		if !s.Active() {
+			continue
+		}
+		u := Upcoming{ID: s.ID, Name: s.Name, Amount: s.Amount, Currency: s.Currency}
+		switch {
+		case s.InTrial(now):
+			u.Date, u.Trial = s.TrialEnds, true
+		default:
+			u.Date = s.NextRenewal(now)
+		}
+		if u.Date.IsZero() {
+			continue
+		}
+		u.Days = u.Date.DaysUntil(now)
+		if u.Days < 0 || u.Days > days {
+			continue
+		}
+		out = append(out, u)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].Date.Equal(out[j].Date.Time) {
+			return out[i].Date.Before(out[j].Date.Time)
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }
 
 // CategorySpend is monthly spend for a category with its share of the total.
@@ -117,6 +166,7 @@ func Build(subs []model.Subscription, profile model.Profile, p fx.Provider, now 
 	})
 
 	r.Heatmap = heatmap(subs, now)
+	r.Upcoming = UpcomingWithin(subs, now, 60)
 	return r
 }
 
@@ -148,7 +198,7 @@ func heatmap(subs []model.Subscription, now time.Time) []WeekBucket {
 		if !s.Active() || s.RenewalDate.IsZero() {
 			continue
 		}
-		days := int(s.RenewalDate.Sub(now).Hours() / 24)
+		days := s.NextRenewal(now).DaysUntil(now)
 		if days < 0 || days >= 28 {
 			continue
 		}

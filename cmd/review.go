@@ -56,10 +56,14 @@ func newMarkCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d := depsFrom(cmd)
-			if err := applyReviewChoice(d, args[0], "keep"); err != nil {
+			sub, err := resolveSub(d, args[0])
+			if err != nil {
 				return err
 			}
-			fmt.Fprintf(d.Out, "%s Confirmed %s\n", d.Render.Accent("✓"), args[0])
+			if err := applyReviewChoice(d, sub.ID, "keep"); err != nil {
+				return err
+			}
+			fmt.Fprintf(d.Out, "%s Confirmed %s\n", d.Render.Accent("✓"), sub.ID)
 			autoSync(cmd)
 			return nil
 		},

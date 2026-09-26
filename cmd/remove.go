@@ -16,7 +16,7 @@ func newRemoveCmd() *cobra.Command {
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d := depsFrom(cmd)
-			sub, err := d.Store.GetSub(args[0])
+			sub, err := resolveSub(d, args[0])
 			if err != nil {
 				return err
 			}

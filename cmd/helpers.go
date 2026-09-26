@@ -19,9 +19,14 @@ var errCancelled = errors.New("cancelled")
 // subFlags holds the non-interactive flags shared by add and edit.
 type subFlags struct {
 	name, currency, cycle, category, payment, renewal, notes, status string
+	url, trialEnds                                                   string
 	amount                                                           float64
 	amountSet                                                        bool
 }
+
+// subFlagNames lists every flag register adds, for "did the user pass any".
+var subFlagNames = []string{"name", "amount", "currency", "cycle", "category", "payment",
+	"renewal", "notes", "status", "url", "trial-ends"}
 
 func (f *subFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.name, "name", "", "subscription name")
@@ -33,6 +38,8 @@ func (f *subFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.renewal, "renewal", "", "next renewal date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&f.notes, "notes", "", "free-form notes")
 	cmd.Flags().StringVar(&f.status, "status", "", "status: active|paused|cancelled")
+	cmd.Flags().StringVar(&f.url, "url", "", "billing or cancellation page (opened by `leak open`)")
+	cmd.Flags().StringVar(&f.trialEnds, "trial-ends", "", "free trial end date (YYYY-MM-DD); `leak due` warns before it converts")
 	cmd.PreRun = func(cmd *cobra.Command, _ []string) {
 		f.amountSet = cmd.Flags().Changed("amount")
 	}
@@ -70,6 +77,14 @@ func (f *subFlags) applyTo(sub *model.Subscription, p model.Profile) {
 	if f.notes != "" {
 		sub.Notes = f.notes
 	}
+	if f.url != "" {
+		sub.URL = strings.TrimSpace(f.url)
+	}
+	if f.trialEnds != "" {
+		if dt, err := model.ParseDate(f.trialEnds); err == nil {
+			sub.TrialEnds = dt
+		}
+	}
 	if f.status != "" {
 		sub.Status = strings.ToLower(f.status)
 	} else if sub.Status == "" {
@@ -77,14 +92,16 @@ func (f *subFlags) applyTo(sub *model.Subscription, p model.Profile) {
 	}
 }
 
-// attachFXRecord fetches the FX rate for the subscription's currency vs the
-// default reporting currency and appends a billing record capturing it.
+// attachFXRecord records the most recent charge Leak can infer, with the FX
+// rate in effect that day, so historical spend stays stable as rates move. A
+// subscription still in trial has not been charged yet, so nothing is recorded.
 func attachFXRecord(d *Deps, sub *model.Subscription) {
-	target := d.Profile.DefaultCurrency
-	billedOn := sub.RenewalDate
-	if billedOn.IsZero() {
-		billedOn = model.Date{Time: d.Clock.Now()}
+	now := d.Clock.Now()
+	billedOn, ok := model.LastBilled(*sub, now)
+	if !ok {
+		return
 	}
+	target := d.Profile.DefaultCurrency
 	rate, estimated, err := d.FX.Rate(sub.Currency, target, billedOn)
 	rec := model.BillingRecord{
 		BilledOn: billedOn,
@@ -114,6 +131,38 @@ func monthlyInDefault(d *Deps, sub model.Subscription) float64 {
 	return monthly * rate
 }
 
+// resolveSub finds a subscription by id, then by name, then by a unique prefix
+// of either — case-insensitively — so `leak show net` works without knowing
+// the slug. Ambiguity is an error listing the matches.
+func resolveSub(d *Deps, ref string) (model.Subscription, error) {
+	data, err := d.Store.Load()
+	if err != nil {
+		return model.Subscription{}, err
+	}
+	want := strings.ToLower(strings.TrimSpace(ref))
+	var prefix []model.Subscription
+	for _, s := range data.Subscriptions {
+		id, name := strings.ToLower(s.ID), strings.ToLower(s.Name)
+		if id == want || name == want {
+			return s, nil
+		}
+		if strings.HasPrefix(id, want) || strings.HasPrefix(name, want) {
+			prefix = append(prefix, s)
+		}
+	}
+	switch len(prefix) {
+	case 0:
+		return model.Subscription{}, fmt.Errorf("subscription %q not found — `leak list` shows ids", ref)
+	case 1:
+		return prefix[0], nil
+	}
+	ids := make([]string, len(prefix))
+	for i, s := range prefix {
+		ids[i] = s.ID
+	}
+	return model.Subscription{}, fmt.Errorf("%q matches several: %s", ref, strings.Join(ids, ", "))
+}
+
 // --- huh option + validation helpers ---
 
 // addNewSentinel is the option value that signals "let me type a new value".
@@ -126,6 +175,23 @@ func cycleOptions() []huh.Option[string] {
 		huh.NewOption("Yearly", model.CycleYearly),
 		huh.NewOption("Weekly", model.CycleWeekly),
 		huh.NewOption("Quarterly", model.CycleQuarterly),
+	}
+}
+
+// optionGroup returns a wizard step for a profile-backed choice. With values
+// to choose from it is a select plus a hidden "add new" input; with none (a
+// fresh profile has no payment methods) it is a single free-text input, so the
+// user is not shown a menu with one entry.
+func optionGroup(title string, values []string, pick, custom *string) []*huh.Group {
+	if len(values) == 0 {
+		*pick = addNewSentinel
+		return []*huh.Group{huh.NewGroup(huh.NewInput().Title(title).Value(custom))}
+	}
+	return []*huh.Group{
+		huh.NewGroup(huh.NewSelect[string]().Title(title).Options(stringOptions(values, *pick)...).Value(pick)),
+		huh.NewGroup(huh.NewInput().Title("New " + strings.ToLower(strings.TrimSuffix(title, "?")) + "?").
+			Value(custom).Validate(validateNonEmpty)).
+			WithHideFunc(func() bool { return *pick != addNewSentinel }),
 	}
 }
 
@@ -189,4 +255,12 @@ func parseFloat(s string) (float64, error) {
 
 func trimFloat(f float64) string {
 	return strconv.FormatFloat(f, 'f', -1, 64)
+}
+
+// orDash renders an empty field as a dash so aligned detail views stay legible.
+func orDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "—"
+	}
+	return s
 }

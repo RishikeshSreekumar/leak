@@ -122,6 +122,7 @@ func checkStorage(d *Deps, data *model.Data) []finding {
 // checkRecords validates every subscription.
 func checkRecords(d *Deps, data *model.Data) []finding {
 	var out []finding
+	now := d.Clock.Now()
 	seen := map[string]string{} // lowercased name -> first id holding it
 	cycles := map[string]bool{
 		model.CycleWeekly: true, model.CycleMonthly: true,
@@ -173,6 +174,19 @@ func checkRecords(d *Deps, data *model.Data) []finding {
 			out = append(out, finding{
 				Severity: sevWarn, ID: s.ID, Subject: "renewal date",
 				Detail: "no renewal date — this subscription never appears in `leak due`",
+				Fix:    "run `leak edit " + s.ID + "`",
+			})
+		} else if next := s.NextRenewal(now); s.Active() && !next.Equal(s.RenewalDate.Time) {
+			out = append(out, finding{
+				Severity: sevOK, ID: s.ID, Subject: "renewal anchor",
+				Detail: fmt.Sprintf("stored date %s has passed; reports use the rolled-forward %s", s.RenewalDate, next),
+				Fix:    "store " + next.String() + " as the renewal date",
+			})
+		}
+		if !s.TrialEnds.IsZero() && !s.RenewalDate.IsZero() && s.TrialEnds.After(s.RenewalDate.Time) {
+			out = append(out, finding{
+				Severity: sevWarn, ID: s.ID, Subject: "trial",
+				Detail: fmt.Sprintf("trial ends %s but the renewal date %s is earlier — one of them is wrong", s.TrialEnds, s.RenewalDate),
 				Fix:    "run `leak edit " + s.ID + "`",
 			})
 		}
@@ -323,6 +337,8 @@ func repair(d *Deps, data *model.Data, findings []finding) ([]finding, error) {
 			sub.Status = model.StatusActive
 		case "currency":
 			sub.Currency = d.Profile.DefaultCurrency
+		case "renewal anchor":
+			sub.RenewalDate = sub.NextRenewal(now)
 		default:
 			continue
 		}
@@ -351,7 +367,7 @@ func autoFixable(f finding) bool {
 		return false
 	}
 	switch f.Subject {
-	case "billing cycle", "status":
+	case "billing cycle", "status", "renewal anchor":
 		return true
 	case "currency":
 		// Only a missing currency is unambiguous; a malformed one might be a

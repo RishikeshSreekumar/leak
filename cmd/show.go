@@ -14,7 +14,7 @@ func newShowCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d := depsFrom(cmd)
-			sub, err := d.Store.GetSub(args[0])
+			sub, err := resolveSub(d, args[0])
 			if err != nil {
 				return err
 			}
@@ -28,11 +28,26 @@ func newShowCmd() *cobra.Command {
 				conv := monthlyInDefault(d, sub)
 				fmt.Fprintf(out, "  ≈ %s/mo\n", money.Format(money.Round2(conv), d.Profile.DefaultCurrency))
 			}
-			fmt.Fprintf(out, "  Category:      %s\n", sub.Category)
-			fmt.Fprintf(out, "  Payment:       %s\n", sub.PaymentMethod)
-			fmt.Fprintf(out, "  Renewal:       %s\n", sub.RenewalDate)
+			fmt.Fprintf(out, "  Category:      %s\n", orDash(sub.Category))
+			fmt.Fprintf(out, "  Payment:       %s\n", orDash(sub.PaymentMethod))
+			now := d.Clock.Now()
+			if next := sub.NextRenewal(now); !next.IsZero() && !next.Equal(sub.RenewalDate.Time) {
+				fmt.Fprintf(out, "  Next renewal:  %s  %s\n", next, d.Render.Muted("(anchored on "+sub.RenewalDate.String()+")"))
+			} else {
+				fmt.Fprintf(out, "  Next renewal:  %s\n", next)
+			}
+			if !sub.TrialEnds.IsZero() {
+				label := "  Trial ends:    %s\n"
+				if sub.InTrial(now) {
+					label = "  Trial ends:    %s  " + d.Render.Warn("cancel before this to pay nothing") + "\n"
+				}
+				fmt.Fprintf(out, label, sub.TrialEnds)
+			}
 			fmt.Fprintf(out, "  Status:        %s\n", sub.Status)
 			fmt.Fprintf(out, "  Last confirmed:%s\n", " "+sub.LastConfirmed.String())
+			if sub.URL != "" {
+				fmt.Fprintf(out, "  URL:           %s  %s\n", sub.URL, d.Render.Muted("(`leak open "+sub.ID+"`)"))
+			}
 			if sub.Notes != "" {
 				fmt.Fprintf(out, "  Notes:         %s\n", sub.Notes)
 			}

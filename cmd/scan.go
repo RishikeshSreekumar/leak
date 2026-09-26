@@ -69,10 +69,13 @@ func newScanCmd() *cobra.Command {
 				rows = append(rows, row{Candidate: c, Known: known[detect.MerchantKey(c.Name)]})
 			}
 
+			mismatches := detect.Reconcile(data.Subscriptions, txns, d.Clock.Now())
+
 			if jsonOut, _ := cmd.Flags().GetBool("json"); jsonOut {
 				return writeJSON(d, map[string]any{
 					"transactions": len(txns),
 					"candidates":   rows,
+					"mismatches":   mismatches,
 				})
 			}
 
@@ -81,7 +84,6 @@ func newScanCmd() *cobra.Command {
 			if len(rows) == 0 {
 				fmt.Fprintln(d.Out, d.Render.Muted(
 					"No recurring charges found. Try --min-occurrences 2 for a shorter statement."))
-				return nil
 			}
 			for _, r := range rows {
 				tag := ""
@@ -91,6 +93,10 @@ func newScanCmd() *cobra.Command {
 				fmt.Fprintf(d.Out, "%-22s %10s %-10s %d charges  conf %.2f  next %s%s\n",
 					r.Name, money.Format(r.Amount, r.Currency), r.Cycle, r.Occurrences,
 					r.Confidence, r.NextRenewal.Format(model.DateLayout), tag)
+			}
+			printMismatches(d, mismatches)
+			if len(rows) == 0 {
+				return nil
 			}
 
 			if !apply {
@@ -122,6 +128,30 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&apply, "apply", false, "add the detected subscriptions (default is a dry run)")
 	jsonFlag(cmd)
 	return cmd
+}
+
+// printMismatches reports where the registry and the statement disagree, each
+// with the command that resolves it.
+func printMismatches(d *Deps, ms []detect.Mismatch) {
+	if len(ms) == 0 {
+		return
+	}
+	fmt.Fprintf(d.Out, "\n%s\n\n", d.Render.Heading("Registry vs statement"))
+	for _, m := range ms {
+		var detail, fix string
+		switch m.Kind {
+		case detect.MismatchStillCharging:
+			detail = fmt.Sprintf("marked %s but charged on %s", m.Status, m.LastCharged.Format(model.DateLayout))
+			fix = "chase the provider, or `leak edit " + m.ID + " --status active`"
+		case detect.MismatchStopped:
+			detail = fmt.Sprintf("last charged %s — no charge since", m.LastCharged.Format(model.DateLayout))
+			fix = "already cancelled? `leak remove " + m.ID + "`"
+		default:
+			detail = "not in this statement at all"
+			fix = "paid another way, or already gone: `leak remove " + m.ID + "`"
+		}
+		fmt.Fprintf(d.Out, "%s %-22s %s\n%s\n", d.Render.Warn("!"), m.Name, detail, d.Render.Muted("    "+fix))
+	}
 }
 
 // applyCandidates writes the untracked candidates into the registry.

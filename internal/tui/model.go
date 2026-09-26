@@ -362,9 +362,10 @@ func sortSubs(cfg Config, subs []model.Subscription, mode sortMode) []model.Subs
 		sort.SliceStable(out, func(i, j int) bool {
 			return monthlyInDefault(cfg, out[i]) > monthlyInDefault(cfg, out[j])
 		})
-	default: // sortRenewal — zero dates sink to the bottom
+	default: // sortRenewal — next charge first, zero dates sink to the bottom
+		now := cfg.Clock.Now()
 		sort.SliceStable(out, func(i, j int) bool {
-			a, b := out[i].RenewalDate, out[j].RenewalDate
+			a, b := out[i].NextRenewal(now), out[j].NextRenewal(now)
 			if a.IsZero() != b.IsZero() {
 				return !a.IsZero()
 			}
@@ -374,22 +375,18 @@ func sortSubs(cfg Config, subs []model.Subscription, mode sortMode) []model.Subs
 	return out
 }
 
-// dueRows returns active subscriptions renewing within the window, soonest first.
+// dueRows returns the subscriptions with a renewal or trial end inside the
+// window, soonest first — the same set `leak due` prints.
 func dueRows(subs []model.Subscription, now time.Time, days int) []model.Subscription {
-	var out []model.Subscription
+	byID := make(map[string]model.Subscription, len(subs))
 	for _, s := range subs {
-		if !s.Active() || s.RenewalDate.IsZero() {
-			continue
-		}
-		d := int(s.RenewalDate.Sub(now).Hours() / 24)
-		if d < 0 || d > days {
-			continue
-		}
-		out = append(out, s)
+		byID[s.ID] = s
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].RenewalDate.Before(out[j].RenewalDate.Time)
-	})
+	items := insights.UpcomingWithin(subs, now, days)
+	out := make([]model.Subscription, 0, len(items))
+	for _, u := range items {
+		out = append(out, byID[u.ID])
+	}
 	return out
 }
 

@@ -47,7 +47,7 @@ Leak is already a shippable v1 CLI/TUI, not a prototype.
 | Backup / restore | ✅ Done | `backup`/`backup list`/`backup prune`/`restore`, auto-snapshot before destructive changes, retention, optional git commit, schema versioning + migrations |
 | Sync | ✅ Done | `internal/sync` implements dir + git transports, per-record merge against a stored merge base (`sync_state.json`), tombstones, LWW and manual strategies, `sync init/status/pull/push/disable`, `--auto` |
 | Multi-source import | 🟡 Bank CSV done | `leak scan` detects recurring charges from bank/card CSV exports; email and app-store receipts still open |
-| Manage subs (act on them) | 🔴 Not started | Tracks + flags zombies; no cancel workflow, reminders, or provider metadata |
+| Manage subs (act on them) | 🟡 Minimal | Per-subscription `url` + `leak open`, `trial_ends` in `due`, `due --quiet` for a shell-rc reminder, statement reconcile in `scan`. No notifications daemon, no provider metadata table (deliberately) |
 
 **Assessment:** Phases 1 and 3 have shipped, along with the bank-CSV half of
 Phase 2. The remaining gaps are the other import sources (email, app-store) and

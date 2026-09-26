@@ -19,13 +19,14 @@ func newTestStore(t *testing.T) *YAMLStore {
 }
 
 func TestBootstrapWritesDefaultConfig(t *testing.T) {
+	t.Setenv("LC_ALL", "en_IN.UTF-8")
 	s := newTestStore(t)
 	_, err := os.Stat(filepath.Join(s.Dir(), configFile))
 	assert.NoError(t, err, "config.yaml should exist after bootstrap")
 
 	p, err := s.LoadProfile()
 	require.NoError(t, err)
-	assert.Equal(t, "INR", p.DefaultCurrency)
+	assert.Equal(t, "INR", p.DefaultCurrency, "LC_ALL=en_IN.UTF-8 picks INR")
 }
 
 func TestAddGetUpdateRemove(t *testing.T) {

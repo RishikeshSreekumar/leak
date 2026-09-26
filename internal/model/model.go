@@ -127,17 +127,22 @@ type BillingRecord struct {
 
 // Subscription is a tracked recurring expense.
 type Subscription struct {
-	ID             string          `yaml:"id" json:"id"`
-	Name           string          `yaml:"name" json:"name"`
-	Amount         float64         `yaml:"amount" json:"amount"`
-	Currency       string          `yaml:"currency" json:"currency"`
-	BillingCycle   string          `yaml:"billing_cycle" json:"billing_cycle"`
-	Category       string          `yaml:"category" json:"category"`
-	PaymentMethod  string          `yaml:"payment_method" json:"payment_method"`
-	RenewalDate    Date            `yaml:"renewal_date" json:"renewal_date"`
-	Status         string          `yaml:"status" json:"status"`
-	LastConfirmed  Date            `yaml:"last_confirmed" json:"last_confirmed"`
-	Notes          string          `yaml:"notes,omitempty" json:"notes,omitempty"`
+	ID            string  `yaml:"id" json:"id"`
+	Name          string  `yaml:"name" json:"name"`
+	Amount        float64 `yaml:"amount" json:"amount"`
+	Currency      string  `yaml:"currency" json:"currency"`
+	BillingCycle  string  `yaml:"billing_cycle" json:"billing_cycle"`
+	Category      string  `yaml:"category" json:"category"`
+	PaymentMethod string  `yaml:"payment_method" json:"payment_method"`
+	RenewalDate   Date    `yaml:"renewal_date" json:"renewal_date"`
+	Status        string  `yaml:"status" json:"status"`
+	LastConfirmed Date    `yaml:"last_confirmed" json:"last_confirmed"`
+	Notes         string  `yaml:"notes,omitempty" json:"notes,omitempty"`
+	// URL is where to manage or cancel the subscription; `leak open` launches it.
+	URL string `yaml:"url,omitempty" json:"url,omitempty"`
+	// TrialEnds is the day a free trial converts to paid. While it is in the
+	// future it is what `leak due` warns about, ahead of any renewal.
+	TrialEnds      Date            `yaml:"trial_ends,omitempty" json:"trial_ends,omitempty"`
 	BillingHistory []BillingRecord `yaml:"billing_history,omitempty" json:"billing_history,omitempty"`
 
 	// Sync bookkeeping — written now so a future cloud sync can merge
@@ -148,6 +153,67 @@ type Subscription struct {
 
 // Active reports whether the subscription is currently active.
 func (s Subscription) Active() bool { return s.Status == StatusActive }
+
+// NextRenewal returns the first renewal on or after today, rolling the stored
+// renewal date forward by whole billing cycles. The stored date is the anchor
+// (the day of month the provider charges on) and is never rewritten by reads,
+// so a hand-edited file stays honest; `leak doctor --fix` persists the roll.
+// Zero if no renewal date is set.
+func (s Subscription) NextRenewal(now time.Time) Date {
+	if s.RenewalDate.IsZero() {
+		return s.RenewalDate
+	}
+	today := DayOf(now)
+	next := s.RenewalDate
+	for n := 1; next.Before(today.Time) && n < 10000; n++ {
+		next = AdvanceDate(s.RenewalDate, s.BillingCycle, n)
+	}
+	return next
+}
+
+// InTrial reports whether the subscription has a trial that has not ended yet.
+func (s Subscription) InTrial(now time.Time) bool {
+	return !s.TrialEnds.IsZero() && !s.TrialEnds.Before(DayOf(now).Time)
+}
+
+// DayOf truncates a time to a UTC calendar day, the granularity Leak reasons in.
+func DayOf(t time.Time) Date {
+	return NewDate(t.Year(), t.Month(), t.Day())
+}
+
+// DaysUntil returns whole days from now until d (negative if d has passed).
+func (d Date) DaysUntil(now time.Time) int {
+	return int(d.Sub(DayOf(now).Time).Hours() / 24)
+}
+
+// AdvanceDate moves d forward by n billing cycles. Month-based cycles keep the
+// anchor day and clamp to the target month's length (Jan 31 → Feb 28 → Mar 31),
+// which is how card issuers and app stores bill.
+func AdvanceDate(d Date, cycle string, n int) Date {
+	if d.IsZero() || n <= 0 {
+		return d
+	}
+	switch strings.ToLower(cycle) {
+	case CycleWeekly:
+		return Date{d.AddDate(0, 0, 7*n)}
+	case CycleQuarterly:
+		return addMonths(d, 3*n)
+	case CycleYearly:
+		return addMonths(d, 12*n)
+	default:
+		return addMonths(d, n)
+	}
+}
+
+func addMonths(d Date, months int) Date {
+	y, m, day := d.Date()
+	first := time.Date(y, m+time.Month(months), 1, 0, 0, 0, 0, time.UTC)
+	last := first.AddDate(0, 1, -1).Day()
+	if day > last {
+		day = last
+	}
+	return NewDate(first.Year(), first.Month(), day)
+}
 
 // Touch bumps the sync bookkeeping fields; call on every mutation.
 func (s *Subscription) Touch(now time.Time) {
@@ -237,19 +303,62 @@ func (p *Profile) Normalize() {
 // Bool returns a pointer to v, for setting optional profile flags.
 func Bool(v bool) *bool { return &v }
 
-// DefaultProfile returns the first-run profile.
-func DefaultProfile() Profile {
+// DefaultProfile returns the first-run profile with USD as the reporting
+// currency. Use DefaultProfileFor to pick the currency from the user's locale.
+func DefaultProfile() Profile { return DefaultProfileFor("USD") }
+
+// DefaultProfileFor returns the first-run profile reporting in currency. There
+// are no payment methods by default: they are personal (a card name, a wallet)
+// and the add wizard offers to create one the first time it is needed.
+func DefaultProfileFor(currency string) Profile {
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	if currency == "" {
+		currency = "USD"
+	}
+	currencies := []string{currency}
+	for _, c := range []string{"USD", "EUR", "GBP", "INR", "JPY", "AUD", "CAD", "SGD", "AED", "CHF"} {
+		if c != currency {
+			currencies = append(currencies, c)
+		}
+	}
 	return Profile{
-		DefaultCurrency:      "INR",
+		DefaultCurrency:      currency,
 		ExchangeRateProvider: "frankfurter.dev",
 		ReviewAfterDays:      90,
 		StaleAfterDays:       180,
-		Currencies:           []string{"INR", "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "SGD", "AED", "CHF"},
+		Currencies:           currencies,
 		Categories:           []string{"Development", "Entertainment", "Storage", "Utilities", "AI"},
-		PaymentMethods:       []string{"ICICI Amazon Pay", "HDFC Millennia", "SBI Cashback", "UPI", "PayPal"},
 		AutoBackup:           Bool(true),
 		BackupKeep:           DefaultBackupKeep,
 	}
+}
+
+// localeCurrencies maps an ISO 3166 country code (the part after "_" in a
+// POSIX locale such as en_IN.UTF-8) to the currency used there.
+var localeCurrencies = map[string]string{
+	"US": "USD", "IN": "INR", "GB": "GBP", "IE": "EUR", "DE": "EUR", "FR": "EUR",
+	"ES": "EUR", "IT": "EUR", "NL": "EUR", "BE": "EUR", "AT": "EUR", "PT": "EUR",
+	"FI": "EUR", "GR": "EUR", "JP": "JPY", "AU": "AUD", "NZ": "NZD", "CA": "CAD",
+	"SG": "SGD", "AE": "AED", "CH": "CHF", "SE": "SEK", "NO": "NOK", "DK": "DKK",
+	"PL": "PLN", "CZ": "CZK", "BR": "BRL", "MX": "MXN", "ZA": "ZAR", "KR": "KRW",
+	"CN": "CNY", "HK": "HKD", "TW": "TWD", "ID": "IDR", "MY": "MYR", "PH": "PHP",
+	"TH": "THB", "VN": "VND", "TR": "TRY", "IL": "ILS", "SA": "SAR", "NG": "NGN",
+	"KE": "KES", "PK": "PKR", "BD": "BDT", "LK": "LKR", "AR": "ARS", "CL": "CLP",
+	"CO": "COP", "RU": "RUB", "UA": "UAH", "HU": "HUF", "RO": "RON",
+}
+
+// CurrencyForLocale guesses a reporting currency from a POSIX locale string
+// ("en_IN.UTF-8" → "INR"). Empty when the locale carries no known country.
+func CurrencyForLocale(locale string) string {
+	locale = strings.TrimSpace(locale)
+	if i := strings.IndexAny(locale, ".@"); i >= 0 {
+		locale = locale[:i]
+	}
+	parts := strings.FieldsFunc(locale, func(r rune) bool { return r == '_' || r == '-' })
+	if len(parts) < 2 {
+		return ""
+	}
+	return localeCurrencies[strings.ToUpper(parts[len(parts)-1])]
 }
 
 // Tombstone records a hard-deleted subscription. Without it a delete on one
@@ -312,4 +421,38 @@ func (d *Data) Migrate() (changed bool) {
 		d.Version = SchemaVersion
 	}
 	return from != d.Version
+}
+
+// LastBilled infers the most recent day the subscription was charged: the
+// renewal date itself when it has passed, otherwise one cycle before the next
+// renewal. False when nothing can have been charged yet — no renewal date, or a
+// trial still running.
+func LastBilled(s Subscription, now time.Time) (Date, bool) {
+	if s.RenewalDate.IsZero() || s.InTrial(now) {
+		return Date{}, false
+	}
+	today := DayOf(now)
+	if !s.RenewalDate.After(today.Time) {
+		return s.RenewalDate, true
+	}
+	next := s.RenewalDate
+	prev := retreatOne(next, s.BillingCycle)
+	if prev.After(today.Time) {
+		return Date{}, false
+	}
+	return prev, true
+}
+
+// retreatOne steps a date back by one billing cycle.
+func retreatOne(d Date, cycle string) Date {
+	switch strings.ToLower(cycle) {
+	case CycleWeekly:
+		return Date{d.AddDate(0, 0, -7)}
+	case CycleQuarterly:
+		return addMonths(d, -3)
+	case CycleYearly:
+		return addMonths(d, -12)
+	default:
+		return addMonths(d, -1)
+	}
 }

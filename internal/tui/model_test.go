@@ -24,6 +24,7 @@ func newLoadedModel(t *testing.T) Model {
 	st, err := store.NewAt(t.TempDir())
 	require.NoError(t, err)
 	prof, _ := st.LoadProfile()
+	prof.DefaultCurrency = "INR"
 
 	// Two active subs due soon, plus one long-stale zombie.
 	_, err = st.AddSub(model.Subscription{
@@ -244,7 +245,7 @@ func TestDetailToggle(t *testing.T) {
 	m, _ = press(t, m, keyEnter) // open detail
 	assert.True(t, m.detail)
 	assert.Contains(t, m.detailBody(), "Netflix")
-	assert.Contains(t, m.detailBody(), "Renewal")
+	assert.Contains(t, m.detailBody(), "Next renewal")
 
 	m, _ = press(t, m, keyEnter) // close
 	assert.False(t, m.detail)
@@ -354,7 +355,8 @@ func TestInsightsHasBarsAndSummary(t *testing.T) {
 	body := m.insightsBody()
 	assert.Contains(t, body, "Summary")
 	assert.Contains(t, body, "Top Subscriptions")
-	assert.Contains(t, body, "Payment Methods")
+	assert.NotContains(t, body, "Payment Methods", "empty sections are skipped")
+	assert.Contains(t, body, "Coming Up")
 	assert.Contains(t, body, "█")
 }
 

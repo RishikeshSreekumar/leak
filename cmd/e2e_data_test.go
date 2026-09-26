@@ -157,7 +157,7 @@ func TestE2EHardDeleteLeavesTombstone(t *testing.T) {
 
 func TestE2EImportDryRunAndUpdate(t *testing.T) {
 	h := newHarness(t)
-	h.run(t, "add", "--name", "Netflix", "--amount", "649", "--currency", "INR")
+	h.run(t, "add", "--name", "Netflix", "--amount", "649", "--currency", "INR", "--renewal", "2026-07-21")
 	path := writeTemp(t, "subs.csv",
 		"name,amount,currency,billing_cycle,category\n"+
 			"Netflix,799,INR,monthly,Entertainment\n"+
@@ -285,4 +285,25 @@ func TestE2ESyncInitKeepsGitURLIntact(t *testing.T) {
 	prof, err := h.deps.Store.LoadProfile()
 	require.NoError(t, err)
 	assert.Equal(t, remote, prof.Sync.Target)
+}
+
+func TestE2EScanReconcilesRegistry(t *testing.T) {
+	h := newHarness(t) // 2026-07-15
+	h.run(t, "add", "--name", "Netflix", "--amount", "649", "--currency", "INR", "--renewal", "2026-07-21")
+	h.run(t, "add", "--name", "Spotify", "--amount", "119", "--currency", "INR", "--status", "cancelled")
+	path := writeTemp(t, "stmt.csv",
+		"Date,Description,Amount\n"+
+			"2026-01-05,NETFLIX.COM,649\n"+
+			"2026-02-05,NETFLIX.COM,649\n"+
+			"2026-03-05,NETFLIX.COM,649\n"+
+			"2026-07-01,SPOTIFY AB,119\n")
+	out := h.run(t, "scan", path)
+	assert.Contains(t, out, "Registry vs statement")
+	assert.Contains(t, out, "Netflix")
+	assert.Contains(t, out, "no charge since")
+	assert.Contains(t, out, "marked cancelled but charged on 2026-07-01")
+
+	js := h.run(t, "scan", path, "--json")
+	assert.Contains(t, js, `"kind": "stopped"`)
+	assert.Contains(t, js, `"kind": "still_charging"`)
 }

@@ -35,10 +35,10 @@ type subForm struct {
 	orig  model.Subscription
 	form  *huh.Form
 
-	name, amount, cycle, renewal, notes string
-	currencyPick, currencyCustom        string
-	categoryPick, categoryCustom        string
-	paymentPick, paymentCustom          string
+	name, amount, cycle, renewal, trial, url, notes string
+	currencyPick, currencyCustom                    string
+	categoryPick, categoryCustom                    string
+	paymentPick, paymentCustom                      string
 }
 
 // newSubForm builds the overlay, prefilled from sub (zero value for add).
@@ -49,6 +49,8 @@ func newSubForm(mode formMode, sub model.Subscription, prof model.Profile) *subF
 		name:         sub.Name,
 		cycle:        sub.BillingCycle,
 		renewal:      sub.RenewalDate.String(),
+		trial:        sub.TrialEnds.String(),
+		url:          sub.URL,
 		notes:        sub.Notes,
 		currencyPick: sub.Currency,
 		categoryPick: sub.Category,
@@ -77,35 +79,39 @@ func newSubForm(mode formMode, sub model.Subscription, prof model.Profile) *subF
 	// "add new" follow-up lives in its own hideable group (WithHideFunc is a
 	// Group method, not an Input method). The title/description Note is
 	// rendered as modal chrome (formModal) so it persists across groups.
-	sf.form = huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Name").Value(&sf.name).Validate(nonEmpty),
-		),
+	// choice is a select over profile values plus a hidden "add new" input,
+	// or a plain input when the profile has nothing to choose from yet.
+	choice := func(title string, values []string, pick, custom *string) []*huh.Group {
+		if len(values) == 0 {
+			*pick = addNewSentinel
+			return []*huh.Group{huh.NewGroup(huh.NewInput().Title(title).Value(custom))}
+		}
+		return []*huh.Group{
+			huh.NewGroup(huh.NewSelect[string]().Title(title).
+				Options(stringOptions(values, *pick)...).Value(pick)),
+			huh.NewGroup(huh.NewInput().Title("New " + strings.ToLower(title)).Value(custom).Validate(nonEmpty)).
+				WithHideFunc(notShown(pick)),
+		}
+	}
+
+	groups := []*huh.Group{
+		huh.NewGroup(huh.NewInput().Title("Name").Value(&sf.name).Validate(nonEmpty)),
 		huh.NewGroup(huh.NewInput().Title("Amount").Value(&sf.amount).Validate(positiveFloat)),
-
-		huh.NewGroup(huh.NewSelect[string]().Title("Currency").
-			Options(stringOptions(prof.Currencies, sf.currencyPick)...).Value(&sf.currencyPick)),
-		huh.NewGroup(huh.NewInput().Title("New currency code").
-			Value(&sf.currencyCustom).Validate(nonEmpty)).
-			WithHideFunc(notShown(&sf.currencyPick)),
-
-		huh.NewGroup(huh.NewSelect[string]().Title("Billing cycle").
-			Options(cycleOpts()...).Value(&sf.cycle)),
-
-		huh.NewGroup(huh.NewSelect[string]().Title("Category").
-			Options(stringOptions(prof.Categories, sf.categoryPick)...).Value(&sf.categoryPick)),
-		huh.NewGroup(huh.NewInput().Title("New category").Value(&sf.categoryCustom)).
-			WithHideFunc(notShown(&sf.categoryPick)),
-
-		huh.NewGroup(huh.NewSelect[string]().Title("Payment method").
-			Options(stringOptions(prof.PaymentMethods, sf.paymentPick)...).Value(&sf.paymentPick)),
-		huh.NewGroup(huh.NewInput().Title("New payment method").Value(&sf.paymentCustom)).
-			WithHideFunc(notShown(&sf.paymentPick)),
-
+	}
+	groups = append(groups, choice("Currency", prof.Currencies, &sf.currencyPick, &sf.currencyCustom)...)
+	groups = append(groups, huh.NewGroup(huh.NewSelect[string]().Title("Billing cycle").
+		Options(cycleOpts()...).Value(&sf.cycle)))
+	groups = append(groups, choice("Category", prof.Categories, &sf.categoryPick, &sf.categoryCustom)...)
+	groups = append(groups, choice("Payment method", prof.PaymentMethods, &sf.paymentPick, &sf.paymentCustom)...)
+	groups = append(groups,
 		huh.NewGroup(huh.NewInput().Title("Renewal date (YYYY-MM-DD)").
 			Value(&sf.renewal).Validate(dateOptional)),
+		huh.NewGroup(huh.NewInput().Title("Free trial ends (YYYY-MM-DD, blank if none)").
+			Value(&sf.trial).Validate(dateOptional)),
+		huh.NewGroup(huh.NewInput().Title("Manage/cancel URL (blank if none)").Value(&sf.url)),
 		huh.NewGroup(huh.NewInput().Title("Notes").Value(&sf.notes)),
-	).WithWidth(modalContentWidth).WithShowHelp(true).WithTheme(formTheme())
+	)
+	sf.form = huh.NewForm(groups...).WithWidth(modalContentWidth).WithShowHelp(true).WithTheme(formTheme())
 	return sf
 }
 
@@ -129,6 +135,13 @@ func (sf *subForm) result() model.Subscription {
 	} else {
 		sub.RenewalDate = model.Date{}
 	}
+	sub.TrialEnds = model.Date{}
+	if t := strings.TrimSpace(sf.trial); t != "" {
+		if dt, err := model.ParseDate(t); err == nil {
+			sub.TrialEnds = dt
+		}
+	}
+	sub.URL = strings.TrimSpace(sf.url)
 	if sub.Status == "" {
 		sub.Status = model.StatusActive
 	}

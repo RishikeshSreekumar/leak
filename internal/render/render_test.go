@@ -50,7 +50,7 @@ func fxp() fx.Provider { return fx.Static{Rates: map[string]float64{"USD:INR": 8
 
 func TestGoldenList(t *testing.T) {
 	s := New(false)
-	golden(t, "list", s.List(sampleSubs()))
+	golden(t, "list", s.List(sampleSubs(), now))
 }
 
 func TestGoldenStats(t *testing.T) {
@@ -59,7 +59,7 @@ func TestGoldenStats(t *testing.T) {
 }
 
 func TestGoldenDue(t *testing.T) {
-	golden(t, "due", New(false).Due(sampleSubs(), now, 30))
+	golden(t, "due", New(false).Due(insights.UpcomingWithin(sampleSubs(), now, 30), 30))
 }
 
 func TestGoldenSweep(t *testing.T) {

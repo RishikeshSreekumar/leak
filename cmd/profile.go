@@ -11,7 +11,7 @@ import (
 func newProfileCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "profile",
-		Short: "Show the user profile.",
+		Short: "Show the profile; manage currencies, categories, payment methods.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			d := depsFrom(cmd)
 			p := d.Profile
@@ -26,6 +26,7 @@ func newProfileCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.AddCommand(newCurrencyCmd(), newCategoryCmd(), newPaymentCmd())
 	return cmd
 }
 

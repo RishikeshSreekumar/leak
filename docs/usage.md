@@ -17,7 +17,8 @@ leak tui        # force the dashboard
 
 ## Adding subscriptions
 
-Interactive wizard (prompts for name, amount, currency, category, cycle, renewal):
+Interactive wizard (prompts for name, amount, currency, cycle, renewal, trial
+end, category, payment method, URL, notes):
 
 ```bash
 leak add
@@ -31,7 +32,15 @@ leak add --name Netflix --amount 649 --currency INR \
 ```
 
 - `--cycle` accepts your billing cadence (e.g. `monthly`, `yearly`).
-- `--renewal` is the next billing date (`YYYY-MM-DD`).
+- `--renewal` is a billing date (`YYYY-MM-DD`). It is an *anchor*: Leak rolls
+  it forward by the billing cycle on every read, so a subscription added in
+  January still shows its correct next charge in September. `leak doctor --fix`
+  rewrites the stored date to the current one if you want the file to match.
+- `--trial-ends` marks a free trial. Until that day `leak due` and `leak list`
+  show the trial end instead of the renewal, because that is the day to cancel
+  by. No billing record is written while a trial is running.
+- `--url` is the provider's billing or cancellation page; `leak open <id>`
+  launches it.
 - `--currency` can differ per subscription; reports convert to your default.
 
 ### From a bank statement
@@ -49,14 +58,21 @@ Full details, including the tuning flags, are in
 ## Viewing what you pay for
 
 ```bash
-leak list                 # all active subscriptions
+leak list                 # name, amount, next charge, id
 leak show <id>            # full detail for one subscription
 leak stats                # monthly spend, broken down by category
-leak due                  # renewals in the next 30 days
-leak due --days 7         # renewals in the next 7 days
-leak insights             # top expenses, spending heatmap, savings ideas
-leak categories           # spend grouped by category
-leak payment-methods      # spend grouped by payment method
+leak due                  # renewals and trial ends in the next 30 days
+leak due --days 7         # …in the next 7 days
+leak insights             # top expenses, what's coming up, savings
+leak open <id>            # open the billing/cancel page you stored
+```
+
+`leak due --quiet` prints one line, or nothing when the window is empty, and
+exits 1 when something is due. Drop it in your shell rc for a login nag:
+
+```bash
+# ~/.zshrc
+leak due --days 7 --quiet
 ```
 
 Every one of these takes `--json` for scripting:
@@ -66,8 +82,10 @@ leak list --json | jq '.[] | select(.currency == "USD") | .name'
 leak sweep --json | jq '.savings.yearly'
 ```
 
-Every subscription has a short **id** (shown in `leak list`) used by `show`,
-`edit`, `remove`, and `mark`.
+Every subscription has a short **id** (the last column of `leak list`) used by
+`show`, `edit`, `remove`, `mark`, and `open`. You rarely need to type it in
+full: those commands also accept the name, or any unique prefix of either, case
+insensitively — `leak show net` finds Netflix.
 
 ## Editing and removing
 
@@ -167,7 +185,7 @@ stale_after_days: 180
 auto_backup: true                 # snapshot before bulk/destructive changes
 backup_keep: 20                   # retained snapshots (-1 keeps everything)
 categories: [Development, Entertainment, Storage, Utilities, AI]
-payment_methods: [ICICI Amazon Pay, HDFC Millennia, UPI]
+payment_methods: [Amex, PayPal]   # empty on a fresh install; the wizard adds as you go
 sync:                             # written by `leak sync init`
   kind: dir
   target: /Users/me/Dropbox/leak
@@ -177,13 +195,16 @@ sync:                             # written by `leak sync init`
 Manage the profile from the CLI instead of editing by hand:
 
 ```bash
-leak profile                      # show current profile
-leak currency <CODE>              # set default currency
-leak category add <name>          # add a category
-leak category remove <name>       # remove a category
-leak payment add <name>           # add a payment method
-leak payment remove <name>        # remove a payment method
+leak profile                              # show current profile
+leak profile currency set-default <CODE>  # set the reporting currency
+leak profile currency add|remove <CODE>
+leak profile category add|remove <name>
+leak profile payment add|remove <name>
 ```
+
+On first run the reporting currency is picked from your shell locale
+(`LC_ALL` / `LC_MONETARY` / `LANG`, so `en_IN` starts in INR and `de_DE` in
+EUR), falling back to USD.
 
 ## Sync across devices
 

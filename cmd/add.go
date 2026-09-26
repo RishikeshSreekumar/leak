@@ -69,6 +69,7 @@ func runSubForm(d *Deps, sub *model.Subscription, title string) error {
 		sub.BillingCycle = model.CycleMonthly
 	}
 	renewal := sub.RenewalDate.String()
+	trial := sub.TrialEnds.String()
 
 	// Selects bind to temp picks; the sentinel routes to the *Custom inputs.
 	currencyPick, currencyCustom := sub.Currency, ""
@@ -76,49 +77,34 @@ func runSubForm(d *Deps, sub *model.Subscription, title string) error {
 	paymentPick, paymentCustom := sub.PaymentMethod, ""
 	confirmed := false
 
-	// isAddNew reports whether a pick selected the "add new" sentinel.
-	isAddNew := func(pick *string) func() bool {
-		return func() bool { return *pick != addNewSentinel }
-	}
-
-	form := huh.NewForm(
+	groups := []*huh.Group{
 		huh.NewGroup(huh.NewInput().Title("Subscription name?").Value(&sub.Name)),
 		huh.NewGroup(huh.NewInput().Title("Amount?").Value(&amountStr).Validate(validatePositiveFloat)),
-
-		huh.NewGroup(huh.NewSelect[string]().Title("Currency?").
-			Options(stringOptions(d.Profile.Currencies, sub.Currency)...).Value(&currencyPick)),
-		huh.NewGroup(huh.NewInput().Title("New currency code?").
-			Value(&currencyCustom).Validate(validateNonEmpty)).
-			WithHideFunc(isAddNew(&currencyPick)),
-
+	}
+	groups = append(groups, optionGroup("Currency?", d.Profile.Currencies, &currencyPick, &currencyCustom)...)
+	groups = append(groups,
 		huh.NewGroup(huh.NewSelect[string]().Title("Billing cycle?").
 			Options(cycleOptions()...).Value(&sub.BillingCycle)),
 		huh.NewGroup(huh.NewInput().Title("Renewal date? (YYYY-MM-DD)").
 			Value(&renewal).Validate(validateDateOptional)),
-
-		huh.NewGroup(huh.NewSelect[string]().Title("Category?").
-			Options(stringOptions(d.Profile.Categories, sub.Category)...).Value(&categoryPick)),
-		huh.NewGroup(huh.NewInput().Title("New category?").
-			Value(&categoryCustom).Validate(validateNonEmpty)).
-			WithHideFunc(isAddNew(&categoryPick)),
-
-		huh.NewGroup(huh.NewSelect[string]().Title("Payment method?").
-			Options(stringOptions(d.Profile.PaymentMethods, sub.PaymentMethod)...).Value(&paymentPick)),
-		huh.NewGroup(huh.NewInput().Title("New payment method?").
-			Value(&paymentCustom).Validate(validateNonEmpty)).
-			WithHideFunc(isAddNew(&paymentPick)),
-
+		huh.NewGroup(huh.NewInput().Title("Free trial ends? (YYYY-MM-DD, blank if none)").
+			Value(&trial).Validate(validateDateOptional)),
+	)
+	groups = append(groups, optionGroup("Category?", d.Profile.Categories, &categoryPick, &categoryCustom)...)
+	groups = append(groups, optionGroup("Payment method?", d.Profile.PaymentMethods, &paymentPick, &paymentCustom)...)
+	groups = append(groups,
+		huh.NewGroup(huh.NewInput().Title("Manage/cancel URL? (blank if none)").Value(&sub.URL)),
 		huh.NewGroup(huh.NewInput().Title("Notes?").Value(&sub.Notes)),
-
 		huh.NewGroup(huh.NewConfirm().Title("Save this subscription?").
 			DescriptionFunc(func() string {
-				return subSummary(sub, amountStr, renewal,
+				return subSummary(sub, amountStr, renewal, trial,
 					resolvePick(currencyPick, currencyCustom),
 					resolvePick(categoryPick, categoryCustom),
 					resolvePick(paymentPick, paymentCustom))
-			}, []*string{&currencyPick, &currencyCustom, &categoryPick, &categoryCustom, &paymentPick, &paymentCustom, &amountStr, &renewal}).
+			}, []*string{&currencyPick, &currencyCustom, &categoryPick, &categoryCustom, &paymentPick, &paymentCustom, &amountStr, &renewal, &trial}).
 			Value(&confirmed)),
 	)
+	form := huh.NewForm(groups...)
 	fmt.Fprintln(d.Out, d.Render.Heading(title))
 
 	if err := form.Run(); err != nil {
@@ -147,20 +133,29 @@ func runSubForm(d *Deps, sub *model.Subscription, title string) error {
 		}
 		sub.RenewalDate = dt
 	}
+	sub.TrialEnds = model.Date{}
+	if trial != "" {
+		dt, err := model.ParseDate(trial)
+		if err != nil {
+			return err
+		}
+		sub.TrialEnds = dt
+	}
+	sub.URL = strings.TrimSpace(sub.URL)
 	return nil
 }
 
 // subSummary renders the review-screen description from the resolved fields.
-func subSummary(sub *model.Subscription, amount, renewal, currency, category, payment string) string {
-	if renewal == "" {
-		renewal = "—"
-	}
-	notes := sub.Notes
-	if notes == "" {
-		notes = "—"
+func subSummary(sub *model.Subscription, amount, renewal, trial, currency, category, payment string) string {
+	dash := func(s string) string {
+		if strings.TrimSpace(s) == "" {
+			return "—"
+		}
+		return s
 	}
 	return fmt.Sprintf(
-		"Name:     %s\nAmount:   %s %s\nCycle:    %s\nRenewal:  %s\nCategory: %s\nPayment:  %s\nNotes:    %s",
-		sub.Name, amount, strings.ToUpper(currency), sub.BillingCycle, renewal, category, payment, notes,
+		"Name:     %s\nAmount:   %s %s\nCycle:    %s\nRenewal:  %s\nTrial:    %s\nCategory: %s\nPayment:  %s\nURL:      %s\nNotes:    %s",
+		sub.Name, amount, strings.ToUpper(currency), sub.BillingCycle, dash(renewal), dash(trial),
+		dash(category), dash(payment), dash(sub.URL), dash(sub.Notes),
 	)
 }

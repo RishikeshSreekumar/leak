@@ -175,11 +175,11 @@ func (m Model) syncCmd() tea.Cmd {
 // attachFXRecord captures the FX rate for the subscription's currency vs the
 // default reporting currency (mirrors cmd.attachFXRecord).
 func attachFXRecord(cfg Config, sub *model.Subscription) {
-	target := cfg.Profile.DefaultCurrency
-	billedOn := sub.RenewalDate
-	if billedOn.IsZero() {
-		billedOn = model.Date{Time: cfg.Clock.Now()}
+	billedOn, ok := model.LastBilled(*sub, cfg.Clock.Now())
+	if !ok {
+		return
 	}
+	target := cfg.Profile.DefaultCurrency
 	rate, estimated, err := cfg.FX.Rate(sub.Currency, target, billedOn)
 	rec := model.BillingRecord{
 		BilledOn: billedOn,

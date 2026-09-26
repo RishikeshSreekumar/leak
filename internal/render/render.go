@@ -66,29 +66,50 @@ func (s *Styler) Warn(t string) string    { return s.style(s.warn, t) }
 func (s *Styler) Muted(t string) string   { return s.style(s.muted, t) }
 func (s *Styler) Heading(t string) string { return s.style(s.heading, t) }
 
-// List renders the subscription table (spec §5.2).
-func (s *Styler) List(subs []model.Subscription) string {
+// List renders the subscription table: name, amount, next charge, and the id
+// every other command takes.
+func (s *Styler) List(subs []model.Subscription, now time.Time) string {
 	if len(subs) == 0 {
 		return s.Muted("No subscriptions yet. Add one with `leak add`, or find them "+
 			"automatically with `leak scan <statement.csv>`.") + "\n"
 	}
-	nameW := 4
-	for _, sub := range subs {
-		if len(sub.Name) > nameW {
-			nameW = len(sub.Name)
-		}
+	nameW, amtW := 4, 0
+	amts := make([]string, len(subs))
+	for i, sub := range subs {
+		nameW = max(nameW, runeLen(sub.Name))
+		amts[i] = money.Format(sub.Amount, sub.Currency) + cycleSuffix(sub.BillingCycle)
+		amtW = max(amtW, runeLen(amts[i]))
 	}
 	var b strings.Builder
-	for _, sub := range subs {
-		amt := money.Format(sub.Amount, sub.Currency) + cycleSuffix(sub.BillingCycle)
-		line := fmt.Sprintf("%-*s  %s", nameW, sub.Name, amt)
+	for i, sub := range subs {
+		line := fmt.Sprintf("%-*s  %-*s  %-10s  ", nameW, sub.Name, amtW, amts[i], NextChargeLabel(sub, now))
+		line += s.Muted(sub.ID)
 		if sub.Status != model.StatusActive {
 			line += s.Muted(" (" + sub.Status + ")")
 		}
-		b.WriteString(line + "\n")
+		b.WriteString(strings.TrimRight(line, " ") + "\n")
 	}
 	return b.String()
 }
+
+// NextChargeLabel is the compact "when does money move next" cell used by list
+// views: the trial end while in trial, else the rolled-forward renewal date,
+// else a dash.
+func NextChargeLabel(sub model.Subscription, now time.Time) string {
+	if !sub.Active() {
+		return "—"
+	}
+	if sub.InTrial(now) {
+		return "trial " + sub.TrialEnds.Format("Jan 02")
+	}
+	if next := sub.NextRenewal(now); !next.IsZero() {
+		return next.String()
+	}
+	return "—"
+}
+
+// runeLen counts display characters, so currency symbols pad correctly.
+func runeLen(s string) int { return len([]rune(s)) }
 
 // cycleSuffix renders a compact cadence suffix like "/mo".
 func cycleSuffix(cycle string) string {
@@ -106,27 +127,51 @@ func cycleSuffix(cycle string) string {
 	}
 }
 
-// Due renders upcoming renewals (spec §5.3).
-func (s *Styler) Due(subs []model.Subscription, now time.Time, days int) string {
+// Due renders upcoming renewals and trial conversions (spec §5.3).
+func (s *Styler) Due(items []insights.Upcoming, days int) string {
 	var b strings.Builder
 	b.WriteString(s.Heading(fmt.Sprintf("Next %d Days", days)) + "\n\n")
-	any := false
-	for _, sub := range subs {
-		if !sub.Active() || sub.RenewalDate.IsZero() {
-			continue
-		}
-		d := int(sub.RenewalDate.Sub(now).Hours() / 24)
-		if d < 0 || d > days {
-			continue
-		}
-		any = true
-		b.WriteString(fmt.Sprintf("%s  %-18s %s\n",
-			sub.RenewalDate.Format("Jan 02"), sub.Name, money.Format(sub.Amount, sub.Currency)))
-	}
-	if !any {
+	if len(items) == 0 {
 		b.WriteString(s.Muted("Nothing due. Enjoy the quiet.\n"))
+		return b.String()
+	}
+	for _, u := range items {
+		b.WriteString(s.UpcomingLine(u) + "\n")
 	}
 	return b.String()
+}
+
+// UpcomingLine renders one due row: date, name, amount, and a trial marker.
+func (s *Styler) UpcomingLine(u insights.Upcoming) string {
+	line := fmt.Sprintf("%s  %-18s %s", u.Date.Format("Jan 02"), u.Name, money.Format(u.Amount, u.Currency))
+	if u.Trial {
+		line += "  " + s.Warn("trial ends — cancel before this to pay nothing")
+	}
+	return line
+}
+
+// DueOneLine is the shell-prompt form of Due: a single line naming what is
+// coming, or empty when nothing is.
+func (s *Styler) DueOneLine(items []insights.Upcoming, days int) string {
+	if len(items) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(items))
+	for _, u := range items {
+		when := fmt.Sprintf("in %dd", u.Days)
+		switch u.Days {
+		case 0:
+			when = "today"
+		case 1:
+			when = "tomorrow"
+		}
+		p := fmt.Sprintf("%s %s %s", u.Name, money.Format(u.Amount, u.Currency), when)
+		if u.Trial {
+			p = fmt.Sprintf("%s trial ends %s", u.Name, when)
+		}
+		parts = append(parts, p)
+	}
+	return fmt.Sprintf("leak: %d due in %dd — %s\n", len(items), days, strings.Join(parts, ", "))
 }
 
 // Stats renders monthly spend + category breakdown (spec §5.4).
@@ -180,17 +225,26 @@ func (s *Styler) Insights(r insights.Report, zombieCount int, sav audit.Savings)
 	}
 	b.WriteString("\n")
 
-	b.WriteString(s.Heading("Upcoming Renewals") + "\n\n")
-	for _, w := range r.Heatmap {
-		b.WriteString(fmt.Sprintf("%-11s%s\n", w.Label, strings.Repeat("█", w.Count*2)))
+	b.WriteString(s.Heading("Coming Up") + "\n\n")
+	if len(r.Upcoming) == 0 {
+		b.WriteString(s.Muted("Nothing due in the next 60 days.") + "\n")
+	}
+	for i, u := range r.Upcoming {
+		if i == 5 {
+			b.WriteString(s.Muted(fmt.Sprintf("… and %d more — see `leak due --days 60`", len(r.Upcoming)-5)) + "\n")
+			break
+		}
+		b.WriteString(s.UpcomingLine(u) + "\n")
 	}
 	b.WriteString("\n")
 
-	b.WriteString(s.Heading("Payment Methods") + "\n\n")
-	for _, m := range r.ByPaymentMethod {
-		b.WriteString(fmt.Sprintf("%-18s %d subs  %s\n", m.Method, m.Count, money.Format(m.Monthly, r.Currency)))
+	if len(r.ByPaymentMethod) > 0 {
+		b.WriteString(s.Heading("Payment Methods") + "\n\n")
+		for _, m := range r.ByPaymentMethod {
+			b.WriteString(fmt.Sprintf("%-18s %d subs  %s\n", m.Method, m.Count, money.Format(m.Monthly, r.Currency)))
+		}
+		b.WriteString("\n")
 	}
-	b.WriteString("\n")
 
 	b.WriteString(s.Warn(fmt.Sprintf("%d subscription(s) unconfirmed past the stale threshold.", zombieCount)) + "\n")
 	b.WriteString("Potential yearly savings: " + s.Accent(money.Format(sav.Yearly, r.Currency)) + "\n")

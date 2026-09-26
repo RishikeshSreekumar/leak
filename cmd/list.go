@@ -25,7 +25,7 @@ func newListCmd() *cobra.Command {
 			if jsonRequested(cmd) {
 				return writeJSON(d, subs)
 			}
-			fmt.Fprint(d.Out, d.Render.List(subs))
+			fmt.Fprint(d.Out, d.Render.List(subs, d.Clock.Now()))
 			return nil
 		},
 	}

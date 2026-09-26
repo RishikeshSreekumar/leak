@@ -47,7 +47,7 @@ leak scan statement.csv       # find recurring charges in a bank export
 leak add                      # or add one by hand (interactive wizard)
 leak list                     # what am I paying for?
 leak stats                    # monthly spend, by category
-leak due                      # renewals in the next 30 days
+leak due                      # renewals + trial ends in the next 30 days
 leak insights                 # top expenses, heatmap, savings
 leak review                   # mark: confirm what you still use
 leak sweep                    # find zombies + potential savings
@@ -67,11 +67,12 @@ Full walkthrough: [`docs/usage.md`](docs/usage.md).
 
 | Group | Commands |
 |-------|----------|
-| Manage | `add` `list` `show <id>` `edit <id>` `remove <id> [--hard]` `tui` |
-| Analytics | `stats` `due [--days N]` `insights` `categories` `payment-methods` |
+| Manage | `add` `list` `show <id>` `edit <id>` `remove <id> [--hard]` `open <id>` `tui` |
+| Analytics | `stats` `due [--days N] [--quiet]` `insights` |
 | Audit | `review` `mark <id>` `sweep` `gc [--apply]` |
-| Profile | `profile` `category add/remove` `payment add/remove` |
-| Data | `scan <statement.csv>` `import <file>` `export` `backup` `restore` `doctor` `sync` |
+| Data | `scan <statement.csv>` `import <file>` `export` `backup` `restore` `doctor` `sync` `profile` |
+
+Anywhere a command takes an `<id>`, the name or a unique prefix works too.
 
 Read commands take `--json`, so Leak composes with `jq` and anything else:
 
@@ -93,7 +94,10 @@ leak completion zsh > "${fpath[1]}/_leak"     # bash | zsh | fish | powershell
   `LEAK_CONFIG_DIR` elsewhere to relocate it.
 - **Mark & sweep.** `review`/`mark` stamp `last_confirmed`. `sweep` flags any
   active subscription unconfirmed past `stale_after_days` (default 180) as a
-  zombie. `gc` cancels them.
+  zombie. `gc` cancels them. `open <id>` jumps to the provider's cancel page.
+- **Dates that stay right.** A renewal date is an anchor; Leak rolls it forward
+  by billing cycle on every read, so `due` keeps working months after you added
+  something. A `--trial-ends` date takes over until it passes.
 - **Multi-currency.** Subscriptions bill in any currency; reports convert to
   your `default_currency`. The FX rate at billing time is stored on each record
   (via [frankfurter.dev](https://frankfurter.dev)) so historical spending stays
@@ -114,7 +118,9 @@ leak scan statement.csv --apply   # add the untracked ones
 
 It groups the export by merchant, keeps what charges on a steady cadence for a
 steady amount, and reports each candidate with a confidence score, detected
-cycle, and next renewal. Real-world exports are handled: metadata rows above the
+cycle, and next renewal. It also runs the comparison the other way: tracked
+subscriptions the statement stopped charging, and cancelled ones it still
+charges. Real-world exports are handled: metadata rows above the
 header, debit/credit column pairs or a single signed amount, day-first and
 month-first dates, thousands separators, currency symbols, `DR`/`CR` markers.
 Nothing is written without `--apply`, and anything you already track is skipped.
@@ -148,7 +154,7 @@ stale_after_days: 180
 auto_backup: true               # snapshot before bulk/destructive changes
 backup_keep: 20                 # retained snapshots (-1 keeps everything)
 categories: [Development, Entertainment, Storage, Utilities, AI]
-payment_methods: [ICICI Amazon Pay, HDFC Millennia, UPI]
+payment_methods: []             # added as you go; the default currency follows your locale
 sync:
   kind: dir                     # dir | git
   target: /Users/me/Dropbox/leak

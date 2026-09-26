@@ -1,56 +1,60 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
-	"sort"
-	"time"
 
 	"github.com/RishikeshSreekumar/leak/internal/audit"
 	"github.com/RishikeshSreekumar/leak/internal/insights"
-	"github.com/RishikeshSreekumar/leak/internal/model"
 	"github.com/RishikeshSreekumar/leak/internal/money"
 	"github.com/spf13/cobra"
 )
 
+// ErrSomethingDue is returned by `leak due --quiet` when the window is not
+// empty, so a shell hook can branch on the exit status. Execute prints nothing
+// for it: the one-line summary already went to stdout.
+var ErrSomethingDue = errors.New("something is due")
+
 func newDueCmd() *cobra.Command {
-	var days int
+	var (
+		days  int
+		quiet bool
+	)
 	cmd := &cobra.Command{
 		Use:   "due",
-		Short: "Show upcoming renewals.",
+		Short: "Show upcoming renewals and trial conversions.",
+		Long: "List what will charge you inside the look-ahead window. Renewal dates roll " +
+			"forward by billing cycle automatically, and a subscription still in its free " +
+			"trial shows the trial end instead — that is the day to cancel by.\n\n" +
+			"--quiet prints a single line (nothing at all when the window is empty) and " +
+			"exits 1 when something is due, so it drops into a shell prompt or rc file.",
+		Example: "  leak due --days 7\n" +
+			"  leak due --days 7 --quiet     # add to ~/.zshrc for a login nag",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			d := depsFrom(cmd)
 			data, err := d.Store.Load()
 			if err != nil {
 				return err
 			}
-			subs := data.Subscriptions
-			sort.SliceStable(subs, func(i, j int) bool {
-				return subs[i].RenewalDate.Before(subs[j].RenewalDate.Time)
-			})
-			if jsonRequested(cmd) {
-				return writeJSON(d, dueWithin(subs, d.Clock.Now(), days))
+			items := insights.UpcomingWithin(data.Subscriptions, d.Clock.Now(), days)
+			switch {
+			case jsonRequested(cmd):
+				return writeJSON(d, items)
+			case quiet:
+				fmt.Fprint(d.Out, d.Render.DueOneLine(items, days))
+				if len(items) > 0 {
+					return ErrSomethingDue
+				}
+				return nil
 			}
-			fmt.Fprint(d.Out, d.Render.Due(subs, d.Clock.Now(), days))
+			fmt.Fprint(d.Out, d.Render.Due(items, days))
 			return nil
 		},
 	}
 	cmd.Flags().IntVar(&days, "days", 30, "look-ahead window in days")
+	cmd.Flags().BoolVar(&quiet, "quiet", false, "one line or nothing; exit 1 when something is due")
 	jsonFlag(cmd)
 	return cmd
-}
-
-// dueWithin filters active subscriptions renewing inside the window.
-func dueWithin(subs []model.Subscription, now time.Time, days int) []model.Subscription {
-	out := make([]model.Subscription, 0, len(subs))
-	for _, s := range subs {
-		if !s.Active() || s.RenewalDate.IsZero() {
-			continue
-		}
-		if d := int(s.RenewalDate.Sub(now).Hours() / 24); d >= 0 && d <= days {
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 func newStatsCmd() *cobra.Command {
@@ -106,8 +110,9 @@ func newInsightsCmd() *cobra.Command {
 
 func newCategoriesCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "categories",
-		Short: "List categories with counts and spend.",
+		Use:    "categories",
+		Short:  "List categories with counts and spend.",
+		Hidden: true, // same numbers as `leak stats`; kept for scripts
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			d := depsFrom(cmd)
 			data, err := d.Store.Load()
@@ -130,8 +135,9 @@ func newCategoriesCmd() *cobra.Command {
 
 func newPaymentMethodsCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "payment-methods",
-		Short: "List payment methods with counts and spend.",
+		Use:    "payment-methods",
+		Short:  "List payment methods with counts and spend.",
+		Hidden: true, // same numbers as `leak insights`; kept for scripts
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			d := depsFrom(cmd)
 			data, err := d.Store.Load()

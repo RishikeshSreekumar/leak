@@ -8,6 +8,26 @@ All notable changes to Leak are documented here. The format follows
 
 ### Added
 
+- **Renewal dates roll forward.** The stored date is an anchor; `list`, `due`,
+  `show`, `insights`, and the dashboard compute the next charge from it by
+  billing cycle (month-end aware), so nothing silently drops out of `due` after
+  its first cycle. `leak doctor` reports passed anchors and `--fix` rewrites
+  them.
+- **`--trial-ends`** on `add`/`edit` (and in both wizards). While a trial runs,
+  `due` and `list` show the trial end instead of the renewal, flagged as the
+  day to cancel by, and no billing record is fabricated.
+- **`--url`** on `add`/`edit` plus **`leak open <id>`** (`--print` to just
+  echo it): one command from "this is a zombie" to the provider's cancel page.
+- **`leak due --quiet`**: one line or nothing, exit 1 when something is due —
+  a shell-rc login nag with no daemon.
+- **Ids in `leak list`**, and every `<id>` argument now also accepts the name
+  or a unique prefix of either, case-insensitively.
+- **`leak scan` reconciles the registry** against the statement: active
+  subscriptions the bank stopped charging, cancelled ones it still charges, and
+  ones that never appear. Reported under "Registry vs statement" and as
+  `mismatches` in `--json`.
+- `insights` JSON gains an `upcoming` array (next 60 days, trial-aware).
+
 - **`leak scan <statement.csv>`** — detects recurring charges in a bank or card
   statement and proposes them as subscriptions, with a confidence score,
   detected billing cycle, and projected next renewal. Dry run by default;
@@ -50,6 +70,19 @@ All notable changes to Leak are documented here. The format follows
 
 ### Changed
 
+- **First-run defaults are no longer India-specific.** The reporting currency
+  follows the shell locale (`LC_ALL`/`LC_MONETARY`/`LANG`, USD fallback) and
+  there are no preset payment methods; the wizards offer a plain input when
+  the profile has nothing to choose from.
+- **Billing history is no longer seeded with a future charge.** `add` records
+  the last charge Leak can infer (the renewal date if it has passed, else one
+  cycle before it), not the next one.
+- `leak due --json` now emits upcoming items (`id`, `name`, `date`, `days`,
+  `amount`, `currency`, `trial`) instead of raw subscription records.
+- `insights` replaces the four-week bar chart with a "Coming Up" list and
+  skips an empty Payment Methods section.
+- `currency`, `category`, and `payment` moved under `leak profile …`;
+  `categories` and `payment-methods` are hidden. All old spellings still run.
 - Registry schema is now **version 2** (tombstones). Older files migrate
   forward automatically on load.
 - The config directory and its files are created **owner-only** (`0700`/`0600`);

@@ -7,6 +7,7 @@ import (
 	"github.com/RishikeshSreekumar/leak/internal/insights"
 	"github.com/RishikeshSreekumar/leak/internal/model"
 	"github.com/RishikeshSreekumar/leak/internal/money"
+	"github.com/RishikeshSreekumar/leak/internal/render"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -99,8 +100,17 @@ func (m Model) detailBody() string {
 	fmt.Fprintf(&b, "%-14s %s\n", "Status", sub.Status)
 	fmt.Fprintf(&b, "%-14s %s\n", "Category", orDash(sub.Category))
 	fmt.Fprintf(&b, "%-14s %s\n", "Payment", orDash(sub.PaymentMethod))
-	fmt.Fprintf(&b, "%-14s %s\n", "Renewal", orDash(sub.RenewalDate.String()))
+	now := m.cfg.Clock.Now()
+	fmt.Fprintf(&b, "%-14s %s\n", "Next renewal", orDash(sub.NextRenewal(now).String()))
+	if !sub.TrialEnds.IsZero() {
+		trial := sub.TrialEnds.String()
+		if sub.InTrial(now) {
+			trial += "  " + m.rndr.Warn("cancel before this to pay nothing")
+		}
+		fmt.Fprintf(&b, "%-14s %s\n", "Trial ends", trial)
+	}
 	fmt.Fprintf(&b, "%-14s %s\n", "Last confirmed", orDash(sub.LastConfirmed.String()))
+	fmt.Fprintf(&b, "%-14s %s\n", "URL", orDash(sub.URL))
 	fmt.Fprintf(&b, "%-14s %s\n", "Notes", orDash(sub.Notes))
 
 	if len(sub.BillingHistory) > 0 {
@@ -300,15 +310,16 @@ func (m Model) subsBody() string {
 		b.WriteString(m.rndr.Muted("No matching subscriptions.") + "\n")
 		return b.String()
 	}
-	nameW := 4
-	for _, s := range rows {
-		if len(s.Name) > nameW {
-			nameW = len(s.Name)
-		}
+	now := m.cfg.Clock.Now()
+	nameW, amtW := 4, 0
+	amts := make([]string, len(rows))
+	for i, s := range rows {
+		nameW = max(nameW, len([]rune(s.Name)))
+		amts[i] = money.Format(s.Amount, s.Currency) + cycleSuffix(s.BillingCycle)
+		amtW = max(amtW, len([]rune(amts[i])))
 	}
 	for i, s := range rows {
-		amt := money.Format(s.Amount, s.Currency) + cycleSuffix(s.BillingCycle)
-		line := fmt.Sprintf("%-*s  %s", nameW, s.Name, amt)
+		line := fmt.Sprintf("%-*s  %-*s  %s", nameW, s.Name, amtW, amts[i], render.NextChargeLabel(s, now))
 		if !s.Active() {
 			line += m.rndr.Muted(" (" + s.Status + ")")
 		}
@@ -318,17 +329,15 @@ func (m Model) subsBody() string {
 }
 
 func (m Model) dueBody() string {
-	rows := dueRows(m.subs, m.cfg.Clock.Now(), dueDays)
+	items := insights.UpcomingWithin(m.subs, m.cfg.Clock.Now(), dueDays)
 	var b strings.Builder
 	b.WriteString(m.rndr.Heading(fmt.Sprintf("Next %d Days", dueDays)) + "\n\n")
-	if len(rows) == 0 {
+	if len(items) == 0 {
 		b.WriteString(m.rndr.Muted("Nothing due. Enjoy the quiet.") + "\n")
 		return b.String()
 	}
-	for i, s := range rows {
-		line := fmt.Sprintf("%s  %-18s %s",
-			s.RenewalDate.Format("Jan 02"), s.Name, money.Format(s.Amount, s.Currency))
-		b.WriteString(m.sel(i == m.cursor, line) + "\n")
+	for i, u := range items {
+		b.WriteString(m.sel(i == m.cursor, m.rndr.UpcomingLine(u)) + "\n")
 	}
 	return b.String()
 }
@@ -362,28 +371,27 @@ func (m Model) insightsBody() string {
 	}
 	b.WriteString("\n")
 
-	b.WriteString(m.rndr.Heading("Payment Methods") + "\n\n")
-	var maxPm float64
-	for _, pm := range r.ByPaymentMethod {
-		if pm.Monthly > maxPm {
-			maxPm = pm.Monthly
+	if len(r.ByPaymentMethod) > 0 {
+		b.WriteString(m.rndr.Heading("Payment Methods") + "\n\n")
+		var maxPm float64
+		for _, pm := range r.ByPaymentMethod {
+			if pm.Monthly > maxPm {
+				maxPm = pm.Monthly
+			}
 		}
+		for _, pm := range r.ByPaymentMethod {
+			fmt.Fprintf(&b, "%-18s %-16s %s (%d)\n",
+				pm.Method, bar(pm.Monthly, maxPm, 16), money.Format(pm.Monthly, r.Currency), pm.Count)
+		}
+		b.WriteString("\n")
 	}
-	for _, pm := range r.ByPaymentMethod {
-		fmt.Fprintf(&b, "%-18s %-16s %s (%d)\n",
-			pm.Method, bar(pm.Monthly, maxPm, 16), money.Format(pm.Monthly, r.Currency), pm.Count)
-	}
-	b.WriteString("\n")
 
-	b.WriteString(m.rndr.Heading("Upcoming Renewals (4 weeks)") + "\n\n")
-	var maxWk int
-	for _, w := range r.Heatmap {
-		if w.Count > maxWk {
-			maxWk = w.Count
-		}
+	b.WriteString(m.rndr.Heading("Coming Up (60 days)") + "\n\n")
+	if len(r.Upcoming) == 0 {
+		b.WriteString(m.rndr.Muted("Nothing due.") + "\n")
 	}
-	for _, w := range r.Heatmap {
-		fmt.Fprintf(&b, "%-11s %s %d\n", w.Label, bar(float64(w.Count), float64(maxWk), 16), w.Count)
+	for _, u := range r.Upcoming {
+		b.WriteString(m.rndr.UpcomingLine(u) + "\n")
 	}
 	return b.String()
 }
